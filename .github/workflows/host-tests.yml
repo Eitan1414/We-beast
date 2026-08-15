@@ -12,6 +12,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Convert tracked prop asset
+        run: |
+          mkdir -p build-runtime
+          python3 tools/glb_to_wbm.py \
+            assets/source/props/big_box.glb \
+            build-runtime/prop_big_box.wbm
+          python3 - <<'PY'
+          import struct
+          from pathlib import Path
+
+          data = Path('build-runtime/prop_big_box.wbm').read_bytes()
+          magic, version, vertices, indices = struct.unpack_from('<4sIII', data, 0)
+          assert magic == b'WBM1'
+          assert version == 1
+          assert vertices > 0
+          assert indices >= 3 and indices % 3 == 0
+          print(f'prop_big_box.wbm: {vertices} vertices / {indices // 3} triangles')
+          PY
+
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
