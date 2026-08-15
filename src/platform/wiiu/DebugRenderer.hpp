@@ -13,7 +13,11 @@ namespace webeast::wiiu {
 
 class DebugRenderer {
 public:
-    bool init(const char* shaderPath, const WbmMesh* mapMesh);
+    bool init(const char* shaderPath,
+              const WbmMesh* mapMesh,
+              const WbmMesh* smallBoxMesh = nullptr,
+              const WbmMesh* bigBoxMesh = nullptr,
+              const WbmMesh* explosiveBarrelMesh = nullptr);
     void shutdown();
     void draw(const GameWorld& world);
     void drawTitleScreen(std::uint32_t selectedItem, bool optionsOpen);
@@ -33,6 +37,7 @@ private:
     void addDiamond(float cx, float cy, float radius,
                     float r, float g, float b, float a = 1.0f);
     void addMapMesh();
+    bool addPropMesh(const WbmMesh* mesh, const Vec3& position, float worldRadius);
     void addCarHazard(const GameWorld& world);
     void addSpawnedProps(const GameWorld& world);
     void addTitleGeometry(std::uint32_t selectedItem, bool optionsOpen);
@@ -51,6 +56,9 @@ private:
     std::vector<float> m_positions;
     std::vector<float> m_colours;
     const WbmMesh* m_mapMesh = nullptr;
+    const WbmMesh* m_smallBoxMesh = nullptr;
+    const WbmMesh* m_bigBoxMesh = nullptr;
+    const WbmMesh* m_explosiveBarrelMesh = nullptr;
     std::uint32_t m_vertexCount = 0;
     bool m_ready = false;
 };
