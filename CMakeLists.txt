@@ -31,14 +31,15 @@ if(NOT COMMAND wut_create_rpx)
     add_test(NAME wbm_mesh_sim COMMAND wbm_mesh_sim)
 endif()
 
-# Native Wii U/WUT target. V0.1 loads the generated Map 1 WBM asset and renders
-# it with GX2 to both TV and GamePad, while gameplay stays in GameWorld.
+# Native Wii U/WUT target. It now includes the Map 2 hazard audio path in
+# addition to GX2 rendering and VPAD input.
 if(COMMAND wut_create_rpx)
     add_executable(webeast_wiiu
         src/platform/wiiu/main.cpp
         src/platform/wiiu/DebugRenderer.cpp
+        src/platform/wiiu/HornPlayer.cpp
     )
-    target_link_libraries(webeast_wiiu PRIVATE webeast_core)
+    target_link_libraries(webeast_wiiu PRIVATE webeast_core sndcore2)
     wut_create_rpx(webeast_wiiu)
 
     install(FILES "${CMAKE_CURRENT_BINARY_DIR}/webeast_wiiu.rpx"
