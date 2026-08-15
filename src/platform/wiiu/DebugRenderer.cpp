@@ -30,10 +30,10 @@ bool DebugRenderer::init(const char* shaderPath, const WbmMesh* mapMesh) {
         return false;
     }
 
-    const std::uint32_t flags = GX2R_RESOURCE_BIND_VERTEX_BUFFER |
-                                GX2R_RESOURCE_USAGE_CPU_READ |
-                                GX2R_RESOURCE_USAGE_CPU_WRITE |
-                                GX2R_RESOURCE_USAGE_GPU_READ;
+    const GX2RResourceFlags flags = GX2R_RESOURCE_BIND_VERTEX_BUFFER |
+                                    GX2R_RESOURCE_USAGE_CPU_READ |
+                                    GX2R_RESOURCE_USAGE_CPU_WRITE |
+                                    GX2R_RESOURCE_USAGE_GPU_READ;
 
     m_positionBuffer.flags = flags;
     m_positionBuffer.elemSize = sizeof(float) * 4;
@@ -47,7 +47,7 @@ bool DebugRenderer::init(const char* shaderPath, const WbmMesh* mapMesh) {
         return false;
     }
     if (!GX2RCreateBuffer(&m_colourBuffer)) {
-        GX2RDestroyBufferEx(&m_positionBuffer, 0);
+        GX2RDestroyBufferEx(&m_positionBuffer, GX2R_RESOURCE_BIND_NONE);
         WHBGfxFreeShaderGroup(&m_shader);
         return false;
     }
@@ -61,8 +61,8 @@ bool DebugRenderer::init(const char* shaderPath, const WbmMesh* mapMesh) {
 
 void DebugRenderer::shutdown() {
     if (!m_ready) return;
-    GX2RDestroyBufferEx(&m_positionBuffer, 0);
-    GX2RDestroyBufferEx(&m_colourBuffer, 0);
+    GX2RDestroyBufferEx(&m_positionBuffer, GX2R_RESOURCE_BIND_NONE);
+    GX2RDestroyBufferEx(&m_colourBuffer, GX2R_RESOURCE_BIND_NONE);
     WHBGfxFreeShaderGroup(&m_shader);
     m_positions.clear();
     m_colours.clear();
@@ -276,16 +276,16 @@ void DebugRenderer::uploadGeometry() {
     if (m_vertexCount == 0) return;
     const std::size_t byteCount = static_cast<std::size_t>(m_vertexCount) * sizeof(float) * 4;
 
-    void* positionData = GX2RLockBufferEx(&m_positionBuffer, 0);
+    void* positionData = GX2RLockBufferEx(&m_positionBuffer, GX2R_RESOURCE_BIND_NONE);
     if (positionData) {
         std::memcpy(positionData, m_positions.data(), byteCount);
-        GX2RUnlockBufferEx(&m_positionBuffer, 0);
+        GX2RUnlockBufferEx(&m_positionBuffer, GX2R_RESOURCE_BIND_NONE);
     }
 
-    void* colourData = GX2RLockBufferEx(&m_colourBuffer, 0);
+    void* colourData = GX2RLockBufferEx(&m_colourBuffer, GX2R_RESOURCE_BIND_NONE);
     if (colourData) {
         std::memcpy(colourData, m_colours.data(), byteCount);
-        GX2RUnlockBufferEx(&m_colourBuffer, 0);
+        GX2RUnlockBufferEx(&m_colourBuffer, GX2R_RESOURCE_BIND_NONE);
     }
 }
 
