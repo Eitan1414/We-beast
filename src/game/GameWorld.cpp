@@ -4,6 +4,15 @@
 #include <cmath>
 
 namespace webeast {
+namespace {
+
+float approachZero(float value, float amount) {
+    if (value > 0.0f) return std::max(0.0f, value - amount);
+    if (value < 0.0f) return std::min(0.0f, value + amount);
+    return 0.0f;
+}
+
+} // namespace
 
 GameWorld::GameWorld(std::uint32_t randomSeed)
     : m_ball(randomSeed),
@@ -36,6 +45,20 @@ MapPropType GameWorld::randomMapPropType() {
     return MapPropType::ExplosiveBarrel;
 }
 
+float GameWorld::mapPropRadius(MapPropType type) const {
+    switch (type) {
+    case MapPropType::SmallBox:
+        return m_config.props.smallBoxRadius;
+    case MapPropType::BigBox:
+        return m_config.props.bigBoxRadius;
+    case MapPropType::ExplosiveBarrel:
+        return m_config.props.explosiveBarrelRadius;
+    case MapPropType::None:
+    default:
+        return 0.35f;
+    }
+}
+
 void GameWorld::spawnMapProps() {
     m_propCount = 0;
     for (SpawnedMapProp& prop : m_props) prop = {};
@@ -48,8 +71,11 @@ void GameWorld::spawnMapProps() {
         SpawnedMapProp& prop = m_props[i];
         prop.type = randomMapPropType();
         prop.position = m_config.props.points[i];
+        prop.velocity = {};
+        prop.collisionRadius = mapPropRadius(prop.type);
         prop.spawnSlot = static_cast<std::uint8_t>(i);
         prop.active = true;
+        prop.grounded = false;
     }
     m_propCount = MapPropSpawnConfig::SlotCount;
 }
@@ -111,7 +137,104 @@ void GameWorld::fixedUpdate(const PlayerInput* inputs, std::size_t inputCount, f
     }
 
     m_ball.update(dt, m_config.ballArena, m_players.data(), m_playerCount);
+    updateMapProps(dt);
     updateCarHazard(dt);
+}
+
+void GameWorld::updateMapProps(float dt) {
+    if (!m_config.props.enabled || dt <= 0.0f) return;
+
+    for (SpawnedMapProp& prop : m_props) {
+        if (!prop.active) continue;
+
+        prop.velocity.y += m_config.props.gravity * dt;
+        prop.velocity = clampMagnitude(prop.velocity, m_config.props.maxSpeed);
+        prop.position += prop.velocity * dt;
+
+        const bool aboveFloor =
+            prop.position.x >= m_config.player.floorMinX &&
+            prop.position.x <= m_config.player.floorMaxX &&
+            prop.position.z >= m_config.player.floorMinZ &&
+            prop.position.z <= m_config.player.floorMaxZ;
+
+        const float floorCenterY = m_config.player.floorY + prop.collisionRadius;
+        if (aboveFloor && prop.position.y <= floorCenterY && prop.velocity.y <= 0.0f) {
+            const float impactSpeed = -prop.velocity.y;
+            prop.position.y = floorCenterY;
+
+            if (impactSpeed > 1.0f) {
+                prop.velocity.y = impactSpeed * m_config.props.restitution;
+                prop.grounded = false;
+            } else {
+                prop.velocity.y = 0.0f;
+                prop.grounded = true;
+            }
+        } else if (!aboveFloor || prop.position.y > floorCenterY + 0.02f) {
+            prop.grounded = false;
+        }
+
+        if (prop.grounded) {
+            const float drag = m_config.props.groundDrag * dt;
+            prop.velocity.x = approachZero(prop.velocity.x, drag);
+            prop.velocity.z = approachZero(prop.velocity.z, drag);
+        }
+
+        if (prop.position.y < m_config.props.killY) {
+            prop.active = false;
+            prop.velocity = {};
+        }
+    }
+
+    solvePlayerPropCollisions();
+}
+
+void GameWorld::solvePlayerPropCollisions() {
+    for (SpawnedMapProp& prop : m_props) {
+        if (!prop.active) continue;
+
+        for (std::size_t i = 0; i < m_playerCount; ++i) {
+            PlayerState& player = m_players[i];
+            if (player.eliminated) continue;
+
+            const float verticalReach = 0.90f + prop.collisionRadius;
+            if (std::fabs(prop.position.y - player.position.y) > verticalReach) continue;
+
+            const float dx = prop.position.x - player.position.x;
+            const float dz = prop.position.z - player.position.z;
+            const float distSq = dx * dx + dz * dz;
+            const float contactDistance = prop.collisionRadius + player.collisionRadius;
+            if (distSq >= contactDistance * contactDistance) continue;
+
+            const float distance = std::sqrt(std::max(distSq, 0.000001f));
+            Vec3 normal{};
+            if (distance > 0.001f) {
+                normal = {dx / distance, 0.0f, dz / distance};
+            } else {
+                normal = {1.0f, 0.0f, 0.0f};
+            }
+
+            const float penetration = contactDistance - distance;
+            if (penetration > 0.0f) {
+                // Props move more than players so walking into a box feels like
+                // pushing it instead of hitting an invisible wall.
+                prop.position += normal * (penetration * 0.78f);
+                player.position -= normal * (penetration * 0.22f);
+            }
+
+            const float playerTowardProp = std::max(0.0f, dot(player.velocity, normal));
+            if (playerTowardProp > 0.0f) {
+                const float transferred = playerTowardProp * m_config.props.playerPushFactor;
+                prop.velocity.x += normal.x * transferred;
+                prop.velocity.z += normal.z * transferred;
+
+                const float reaction = playerTowardProp * m_config.props.playerReactionFactor;
+                player.velocity.x -= normal.x * reaction;
+                player.velocity.z -= normal.z * reaction;
+            }
+
+            prop.velocity = clampMagnitude(prop.velocity, m_config.props.maxSpeed);
+        }
+    }
 }
 
 void GameWorld::updateCarHazard(float dt) {
@@ -171,6 +294,33 @@ void GameWorld::updateCarHazard(float dt) {
             player.velocity.z += side * m_config.car.sideKick;
             player.position.y += 0.05f;
             m_car.hitMask = static_cast<std::uint8_t>(m_car.hitMask | bit);
+        }
+
+        // The same pass can also throw Map 2 props. This is deliberately a
+        // simple impulse: no expensive general rigid-body solver is needed.
+        if (m_config.props.enabled) {
+            for (SpawnedMapProp& prop : m_props) {
+                if (!prop.active) continue;
+
+                const float reachX = m_config.car.halfWidth + prop.collisionRadius;
+                const float reachZ = m_config.car.halfDepth + prop.collisionRadius;
+                const bool overlaps =
+                    std::fabs(prop.position.x - m_car.position.x) <= reachX &&
+                    std::fabs(prop.position.z - m_car.position.z) <= reachZ &&
+                    prop.position.y <= m_config.car.maxHitHeight + prop.collisionRadius;
+
+                if (!overlaps) continue;
+
+                prop.velocity.x = static_cast<float>(m_car.direction) *
+                                  (m_config.car.knockbackHorizontal * 0.80f);
+                prop.velocity.y = std::max(prop.velocity.y,
+                                           m_config.car.knockbackVertical * 0.72f);
+                const float side = prop.position.z >= m_config.car.laneZ ? 1.0f : -1.0f;
+                prop.velocity.z += side * (m_config.car.sideKick * 0.75f);
+                prop.velocity = clampMagnitude(prop.velocity, m_config.props.maxSpeed);
+                prop.position.y += 0.03f;
+                prop.grounded = false;
+            }
         }
 
         const bool finished =
