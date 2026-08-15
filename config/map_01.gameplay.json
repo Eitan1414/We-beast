@@ -1,0 +1,33 @@
+{
+  "arena": {
+    "id": "map_01",
+    "runtime_scale": 6.0,
+    "bounds": {
+      "min_x": -7.0,
+      "max_x": 7.0,
+      "floor_y": 0.0,
+      "ceiling_y": 8.0,
+      "min_z": -7.0,
+      "max_z": 7.0
+    }
+  },
+  "hazards": [
+    {
+      "type": "random_ball",
+      "asset": "random_ball",
+      "spawn": [0.0, 3.5, 0.0],
+      "radius": 0.42,
+      "restitution": 0.90,
+      "max_speed": 13.0,
+      "lethal_relative_speed": 7.0,
+      "random_impulse_interval_seconds": [0.45, 1.10]
+    }
+  ],
+  "props": [
+    { "asset": "throwable_box_01", "body": "dynamic", "throwable": true },
+    { "asset": "big_box", "body": "dynamic", "throwable": true },
+    { "asset": "construction_cone", "body": "dynamic", "throwable": true },
+    { "asset": "trashcan", "body": "dynamic", "throwable": true },
+    { "asset": "explosive_barrel", "body": "dynamic", "throwable": true, "explosive": true }
+  ]
+}
