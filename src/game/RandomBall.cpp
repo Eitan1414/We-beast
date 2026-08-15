@@ -21,7 +21,6 @@ void RandomBall::reset(const Vec3& spawn, const RandomBallConfig& config) {
         std::sin(angle) * horizontalSpeed
     };
 
-    m_contactCooldown = 0.0f;
     scheduleNextImpulse();
 }
 
@@ -31,7 +30,6 @@ void RandomBall::update(float dt, const ArenaBounds& arena, PlayerState* players
     // Avoid a huge physics jump if a frame stalls on hardware.
     dt = std::min(dt, 1.0f / 20.0f);
 
-    m_contactCooldown = std::max(0.0f, m_contactCooldown - dt);
     m_impulseTimer -= dt;
     if (m_impulseTimer <= 0.0f) {
         applyRandomImpulse();
@@ -128,11 +126,11 @@ void RandomBall::solvePlayerCollisions(PlayerState* players, std::size_t playerC
         const float closingSpeed = std::max(0.0f, -dot(relativeVelocity, normal));
         const float totalRelativeSpeed = length(relativeVelocity);
 
-        // A high-energy impact eliminates the player. A gentle touch does not.
-        if (m_contactCooldown <= 0.0f &&
-            (closingSpeed >= m_config.lethalRelativeSpeed * 0.72f || totalRelativeSpeed >= m_config.lethalRelativeSpeed)) {
+        // Requirement: if the ball really slams/crushes a player, that player is eliminated.
+        // A slow accidental touch remains harmless.
+        if (closingSpeed >= m_config.lethalRelativeSpeed * 0.72f ||
+            totalRelativeSpeed >= m_config.lethalRelativeSpeed) {
             player.eliminated = true;
-            m_contactCooldown = m_config.contactCooldownSeconds;
         }
 
         // Separate the sphere from the player and bounce it away.
