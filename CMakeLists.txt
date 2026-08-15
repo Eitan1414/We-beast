@@ -39,6 +39,13 @@ if(COMMAND wut_create_rpx)
         src/platform/wiiu/DebugRenderer.cpp
         src/platform/wiiu/HornPlayer.cpp
     )
+
+    # Current devkitPro CMake does not automatically add WUT's import-library
+    # directory for extra RPLs named explicitly here (such as sndcore2).
+    target_link_directories(webeast_wiiu PRIVATE
+        "$ENV{DEVKITPRO}/wut/lib"
+        "$ENV{DEVKITPRO}/portlibs/wiiu/lib"
+    )
     target_link_libraries(webeast_wiiu PRIVATE webeast_core sndcore2)
     wut_create_rpx(webeast_wiiu)
 
