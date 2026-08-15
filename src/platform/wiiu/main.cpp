@@ -1,4 +1,5 @@
 #include "DebugRenderer.hpp"
+#include "HornPlayer.hpp"
 #include "assets/WbmMesh.hpp"
 #include "game/GameWorld.hpp"
 
@@ -71,6 +72,20 @@ bool initRenderer(webeast::wiiu::DebugRenderer& renderer,
     return false;
 }
 
+bool initHorn(webeast::wiiu::HornPlayer& horn, const char* sdRoot) {
+    char path[512]{};
+    for (int fallback = 0; fallback < 2; ++fallback) {
+        if (!makeContentPath(path, sizeof(path), sdRoot,
+                             "car_honk.pcm", fallback != 0)) {
+            continue;
+        }
+        // The supplied MP3 is trimmed from 00:01 and preconverted offline to
+        // 16 kHz mono signed 16-bit big-endian PCM for a tiny Wii U runtime path.
+        if (horn.init(path, 16000)) return true;
+    }
+    return false;
+}
+
 } // namespace
 
 int main(int, char**) {
@@ -86,8 +101,10 @@ int main(int, char**) {
         return -2;
     }
 
+    const char* sdRoot = WHBGetSdCardMountPath();
+
     WbmMesh mapMesh;
-    const int loadedMap = loadPreferredMap(mapMesh, WHBGetSdCardMountPath());
+    const int loadedMap = loadPreferredMap(mapMesh, sdRoot);
     if (loadedMap == 0) {
         WHBUnmountSdCard();
         WHBGfxShutdown();
@@ -96,15 +113,21 @@ int main(int, char**) {
     }
 
     webeast::wiiu::DebugRenderer renderer;
-    if (!initRenderer(renderer, &mapMesh, WHBGetSdCardMountPath())) {
+    if (!initRenderer(renderer, &mapMesh, sdRoot)) {
         WHBUnmountSdCard();
         WHBGfxShutdown();
         WHBProcShutdown();
         return -4;
     }
 
+    // Audio is optional at boot: a missing horn asset must not prevent a
+    // graphics/gameplay hardware test from running.
+    webeast::wiiu::HornPlayer horn;
+    initHorn(horn, sdRoot);
+
     GameWorldConfig config{};
     config.car.enabled = loadedMap == 2;
+    config.props.enabled = loadedMap == 2;
 
     GameWorld world(0x57424541u);
     world.reset(1, config);
@@ -112,6 +135,7 @@ int main(int, char**) {
     bool inGame = false;
     bool optionsOpen = false;
     std::uint32_t selectedItem = 0; // 0 = PLAY, 1 = OPTIONS
+    std::uint32_t lastCarWarningSerial = world.car().warningSerial;
 
     while (WHBProcIsRunning()) {
         PlayerInput input{};
@@ -134,6 +158,7 @@ int main(int, char**) {
                     if ((status.trigger & VPAD_BUTTON_A) != 0) {
                         if (selectedItem == 0) {
                             world.reset(1, config);
+                            lastCarWarningSerial = world.car().warningSerial;
                             inGame = true;
                         } else {
                             optionsOpen = true;
@@ -147,6 +172,7 @@ int main(int, char**) {
 
                 if ((status.trigger & VPAD_BUTTON_MINUS) != 0) {
                     world.reset(1, config);
+                    lastCarWarningSerial = world.car().warningSerial;
                 }
                 if ((status.trigger & VPAD_BUTTON_PLUS) != 0) {
                     inGame = false;
@@ -157,6 +183,13 @@ int main(int, char**) {
 
         if (inGame) {
             world.update(1.0f / 60.0f, &input, 1);
+
+            const std::uint32_t warningSerial = world.car().warningSerial;
+            if (warningSerial != lastCarWarningSerial) {
+                lastCarWarningSerial = warningSerial;
+                if (warningSerial != 0) horn.play();
+            }
+
             renderer.draw(world);
         } else {
             renderer.drawTitleScreen(selectedItem, optionsOpen);
@@ -165,6 +198,7 @@ int main(int, char**) {
         OSSleepTicks(OSMillisecondsToTicks(1));
     }
 
+    horn.shutdown();
     renderer.shutdown();
     WHBUnmountSdCard();
     WHBGfxShutdown();
