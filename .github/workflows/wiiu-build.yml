@@ -20,6 +20,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install complete Wii U development group
+        run: |
+          dkp-pacman -Syu --needed --noconfirm wiiu-dev
+
       - name: Configure Wii U build
         run: |
           /opt/devkitpro/portlibs/wiiu/bin/powerpc-eabi-cmake -S . -B build-wiiu -DCMAKE_BUILD_TYPE=Release
