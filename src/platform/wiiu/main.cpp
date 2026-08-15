@@ -34,7 +34,7 @@ bool makeContentPath(char* out, std::size_t outSize,
     return written > 0 && static_cast<std::size_t>(written) < outSize;
 }
 
-bool loadMapFile(WbmMesh& mesh, const char* sdRoot, const char* fileName) {
+bool loadWbmFile(WbmMesh& mesh, const char* sdRoot, const char* fileName) {
     char path[512]{};
     for (int fallback = 0; fallback < 2; ++fallback) {
         if (!makeContentPath(path, sizeof(path), sdRoot, fileName, fallback != 0)) {
@@ -53,13 +53,27 @@ bool loadMapFile(WbmMesh& mesh, const char* sdRoot, const char* fileName) {
 int loadPreferredMap(WbmMesh& mesh, const char* sdRoot) {
     // Current development target is Map 2. Keep Map 1 as a hardware-safe
     // fallback so an older SD bundle can still boot the title screen/game.
-    if (loadMapFile(mesh, sdRoot, "map_02.wbm")) return 2;
-    if (loadMapFile(mesh, sdRoot, "map_01.wbm")) return 1;
+    if (loadWbmFile(mesh, sdRoot, "map_02.wbm")) return 2;
+    if (loadWbmFile(mesh, sdRoot, "map_01.wbm")) return 1;
     return 0;
+}
+
+void loadMap2PropMeshes(WbmMesh& smallBox,
+                        WbmMesh& bigBox,
+                        WbmMesh& explosiveBarrel,
+                        const char* sdRoot) {
+    // Props are optional. If one is missing the renderer keeps its old marker,
+    // so a partial asset bundle can still be tested on real hardware.
+    loadWbmFile(smallBox, sdRoot, "prop_small_box.wbm");
+    loadWbmFile(bigBox, sdRoot, "prop_big_box.wbm");
+    loadWbmFile(explosiveBarrel, sdRoot, "prop_explosive_barrel.wbm");
 }
 
 bool initRenderer(webeast::wiiu::DebugRenderer& renderer,
                   const WbmMesh* mapMesh,
+                  const WbmMesh* smallBoxMesh,
+                  const WbmMesh* bigBoxMesh,
+                  const WbmMesh* explosiveBarrelMesh,
                   const char* sdRoot) {
     char path[512]{};
     for (int fallback = 0; fallback < 2; ++fallback) {
@@ -67,7 +81,10 @@ bool initRenderer(webeast::wiiu::DebugRenderer& renderer,
                              "pos_col_shader.gsh", fallback != 0)) {
             continue;
         }
-        if (renderer.init(path, mapMesh)) return true;
+        if (renderer.init(path, mapMesh,
+                          smallBoxMesh, bigBoxMesh, explosiveBarrelMesh)) {
+            return true;
+        }
     }
     return false;
 }
@@ -112,8 +129,20 @@ int main(int, char**) {
         return -3;
     }
 
+    WbmMesh smallBoxMesh;
+    WbmMesh bigBoxMesh;
+    WbmMesh explosiveBarrelMesh;
+    if (loadedMap == 2) {
+        loadMap2PropMeshes(smallBoxMesh, bigBoxMesh, explosiveBarrelMesh, sdRoot);
+    }
+
     webeast::wiiu::DebugRenderer renderer;
-    if (!initRenderer(renderer, &mapMesh, sdRoot)) {
+    if (!initRenderer(renderer,
+                      &mapMesh,
+                      &smallBoxMesh,
+                      &bigBoxMesh,
+                      &explosiveBarrelMesh,
+                      sdRoot)) {
         WHBUnmountSdCard();
         WHBGfxShutdown();
         WHBProcShutdown();
