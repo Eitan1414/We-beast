@@ -72,6 +72,30 @@ int main() {
     assert(maxHorizontalSpeed > carConfig.player.maxHorizontalSpeed + 2.0f);
     assert(maxHeight > 0.25f);
 
+    // Map 2 props: exactly four random props exist and every one originates
+    // from its corresponding donut marker. No fifth/arbitrary spawn is allowed.
+    GameWorldConfig propConfig{};
+    propConfig.ball.lethalRelativeSpeed = 1000.0f;
+    propConfig.props.enabled = true;
+
+    GameWorld propWorld(0x12345678u);
+    propWorld.reset(1, propConfig);
+
+    assert(propWorld.propCount() == MapPropSpawnConfig::SlotCount);
+    for (std::size_t i = 0; i < propWorld.propCount(); ++i) {
+        const SpawnedMapProp& prop = propWorld.prop(i);
+        const Vec3& expected = propConfig.props.points[i];
+
+        assert(prop.active);
+        assert(prop.spawnSlot == i);
+        assert(prop.type == MapPropType::SmallBox ||
+               prop.type == MapPropType::BigBox ||
+               prop.type == MapPropType::ExplosiveBarrel);
+        assert(std::fabs(prop.position.x - expected.x) < 0.0001f);
+        assert(std::fabs(prop.position.y - expected.y) < 0.0001f);
+        assert(std::fabs(prop.position.z - expected.z) < 0.0001f);
+    }
+
     std::cout << "game_world_sim: OK\n";
     return 0;
 }
