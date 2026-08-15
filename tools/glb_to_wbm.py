@@ -26,6 +26,95 @@ COMPONENT = {
 TYPE_COUNT = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}
 
 
+def _remove_top_level_object_member(text, member_name):
+    """Remove one top-level object-valued member without parsing its value.
+
+    Some Nomad Sculpt GLBs contain a very large, application-specific `extras`
+    object. Older/exported Nomad metadata has occasionally contained JSON that
+    strict parsers reject even though the actual glTF mesh fields are valid.
+    `extras` is explicitly optional for rendering, so on a parse failure we can
+    safely drop only that member and retry the standards-relevant glTF JSON.
+    """
+    needle = json.dumps(member_name)
+    key = text.find(needle)
+    if key < 0:
+        return None
+
+    colon = text.find(":", key + len(needle))
+    if colon < 0:
+        return None
+
+    start = colon + 1
+    while start < len(text) and text[start].isspace():
+        start += 1
+    if start >= len(text) or text[start] not in "{[":
+        return None
+
+    opening = text[start]
+    closing = "}" if opening == "{" else "]"
+    depth = 0
+    in_string = False
+    escaped = False
+    end = None
+
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+        elif ch == opening:
+            depth += 1
+        elif ch == closing:
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+
+    if end is None:
+        return None
+
+    after = end
+    while after < len(text) and text[after].isspace():
+        after += 1
+
+    # Prefer consuming the comma after the member. If it is the last member,
+    # consume the comma immediately before its key instead.
+    if after < len(text) and text[after] == ",":
+        after += 1
+        return text[:key] + text[after:]
+
+    before = key
+    while before > 0 and text[before - 1].isspace():
+        before -= 1
+    if before > 0 and text[before - 1] == ",":
+        before -= 1
+    return text[:before] + text[after:]
+
+
+def _decode_gltf_json(chunk):
+    text = chunk.rstrip(b"\0 \t\r\n").decode("utf-8")
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as original_error:
+        # Nomad's private project-state metadata is irrelevant to the mesh and
+        # can be discarded if it is the only thing making the JSON non-strict.
+        without_extras = _remove_top_level_object_member(text, "extras")
+        if without_extras is None:
+            raise original_error
+        try:
+            return json.loads(without_extras)
+        except json.JSONDecodeError:
+            raise original_error
+
+
 def load_glb(path):
     data = Path(path).read_bytes()
     magic, version, length = struct.unpack_from("<4sII", data, 0)
@@ -41,7 +130,7 @@ def load_glb(path):
         chunk = data[offset : offset + chunk_length]
         offset += chunk_length
         if chunk_type == 0x4E4F534A:
-            gltf = json.loads(chunk.rstrip(b"\0 ").decode("utf-8"))
+            gltf = _decode_gltf_json(chunk)
         elif chunk_type == 0x004E4942:
             bin_chunk = chunk
 
