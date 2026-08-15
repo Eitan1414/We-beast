@@ -4,27 +4,20 @@ Premier test visuel natif WUT/GX2 de la V0.1.
 
 ## Ce que ce build teste
 
-Le rendu est volontairement minimal et **ne charge pas encore les GLB**. Il sert à valider sur le vrai hardware Wii U :
-
 - boucle principale WUT ;
 - lecture du Wii U GamePad avec VPAD ;
 - simulation `GameWorld` à pas fixe ;
-- déplacement et saut ;
-- chute hors arène = élimination ;
-- Random Ball ;
-- collision mortelle Ball/joueur ;
-- rendu GX2 sur **TV + écran du GamePad**.
+- déplacement, saut et chute hors arène ;
+- Random Ball et impact mortel ;
+- parser `WBM1` sur PowerPC big-endian ;
+- chargement de **Map 1 depuis la SD** ;
+- rendu GX2 sur **TV + GamePad**.
 
-## Affichage de debug
+## Affichage
 
-```text
-Grand carré vert/jaune : Map 1 simplifiée
-Carré bleu             : joueur
-Carré gris             : joueur éliminé
-Losange rouge/orange   : Random Ball
-```
+Map 1 n'est plus remplacée par un simple grand carré : le renderer charge `map_01.wbm` et dessine les faces orientées vers le haut. Pour le bundle de test actuel, la texture du tapis est pré-échantillonnée en couleurs de sommets afin de rendre les routes/bâtiments visibles sans pipeline texture GX2 complet.
 
-La taille du joueur et de la Ball augmente légèrement quand leur hauteur `Y` augmente, afin de rendre les rebonds et le saut visibles dans cette vue du dessus.
+Le joueur reste un carré bleu et la Random Ball un losange rouge/orange. Ils seront remplacés par leurs vrais meshes WBM dans le jalon suivant.
 
 ## Contrôles
 
@@ -34,30 +27,33 @@ A             sauter
 -             recommencer la manche
 ```
 
-## Fichiers à placer sur la SD
-
-Layout principal attendu :
+## Layout SD principal
 
 ```text
 sd:/wiiu/apps/webeast/webeast_wiiu.rpx
+sd:/wiiu/apps/webeast/content/map_01.wbm
 sd:/wiiu/apps/webeast/content/pos_col_shader.gsh
 ```
 
-Le programme accepte aussi ce chemin de développement pour le shader :
+Layout de développement également accepté :
 
 ```text
+sd:/wut/content/map_01.wbm
 sd:/wut/content/pos_col_shader.gsh
 ```
 
-Le shader `pos_col_shader.gsh` est déjà versionné dans :
+Si `map_01.wbm` est absent ou invalide, le build quitte avec le code `-3`. Si le shader ne peut pas être chargé, il quitte avec `-4`.
 
-```text
-assets/runtime/shaders/pos_col_shader.gsh
+## Générer Map 1 runtime
+
+```bash
+python -m pip install pillow
+python tools/build_map_visual.py "Map 1.glb" map_01.wbm --grid 64
 ```
 
-## Compilation
+Le mode `--grid 64` produit environ 8 192 triangles, ce qui reste léger pour ce test GX2 tout en conservant suffisamment de couleurs pour reconnaître le tapis.
 
-Avec devkitPro + WUT installés :
+## Compilation Wii U
 
 ```bash
 mkdir -p build-wiiu
@@ -66,14 +62,10 @@ cd build-wiiu
 cmake --build . --parallel
 ```
 
-Le build produit `webeast_wiiu.rpx`.
+## Étape suivante
 
-## Étape suivante après validation hardware
-
-Remplacer progressivement les formes de debug par :
-
-1. `Map 1.glb` ;
-2. `Dummy 1.glb` ;
-3. `Ball.glb` ;
-4. les accessoires et décors ;
-5. le vrai corps physique/ragdoll du joueur.
+1. charger `dummy.wbm` et l'utiliser à la place du carré joueur ;
+2. charger `ball.wbm` et l'utiliser à la place du losange ;
+3. passer de la vue du dessus à une caméra 3D ;
+4. ajouter le vrai sampling texture GX2 ;
+5. brancher les accessoires physiques puis le ragdoll actif.
