@@ -1,0 +1,40 @@
+name: Wii U native build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-wiiu:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkitppc:20260503
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure Wii U build
+        run: |
+          /opt/devkitpro/portlibs/wiiu/bin/powerpc-eabi-cmake -S . -B build-wiiu -DCMAKE_BUILD_TYPE=Release
+
+      - name: Compile RPX
+        run: cmake --build build-wiiu --parallel 2
+
+      - name: Verify RPX
+        run: |
+          test -f build-wiiu/webeast_wiiu.rpx
+          ls -lh build-wiiu/webeast_wiiu.rpx
+
+      - name: Upload Wii U build
+        uses: actions/upload-artifact@v4
+        with:
+          name: webeast-wiiu-rpx
+          if-no-files-found: error
+          path: build-wiiu/webeast_wiiu.rpx
