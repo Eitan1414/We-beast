@@ -1,5 +1,6 @@
 #include "game/GameWorld.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <iostream>
@@ -34,6 +35,42 @@ int main() {
         world.update(1.0f / 60.0f, noInput, 2);
     }
     assert(world.player(0).eliminated);
+
+    // Map 2 car hazard: warning -> crossing -> a player in the lane receives
+    // a strong launch instead of being instantly flagged as eliminated.
+    GameWorldConfig carConfig{};
+    carConfig.ball.lethalRelativeSpeed = 1000.0f;
+    carConfig.ball.horizontalSteeringImpulse = 0.0f;
+    carConfig.ball.verticalKickMin = 0.0f;
+    carConfig.ball.verticalKickMax = 0.0f;
+    carConfig.car.enabled = true;
+    carConfig.car.waitMinSeconds = 0.0f;
+    carConfig.car.waitMaxSeconds = 0.0f;
+    carConfig.car.warningSeconds = 0.0f;
+    carConfig.car.startX = 4.0f;
+    carConfig.car.endX = 5.0f;
+    carConfig.car.speed = 12.0f;
+    carConfig.car.knockbackHorizontal = 16.0f;
+    carConfig.car.knockbackVertical = 9.0f;
+
+    GameWorld carWorld(98765u);
+    carWorld.reset(1, carConfig);
+    carWorld.player(0).position = {0.0f, 0.0f, carConfig.car.laneZ};
+    carWorld.player(0).velocity = {};
+
+    PlayerInput idle{};
+    float maxHorizontalSpeed = 0.0f;
+    float maxHeight = 0.0f;
+    for (int i = 0; i < 90; ++i) {
+        carWorld.update(1.0f / 60.0f, &idle, 1);
+        maxHorizontalSpeed = std::max(maxHorizontalSpeed,
+                                      std::fabs(carWorld.player(0).velocity.x));
+        maxHeight = std::max(maxHeight, carWorld.player(0).position.y);
+    }
+
+    assert(carWorld.car().passSerial > 0);
+    assert(maxHorizontalSpeed > carConfig.player.maxHorizontalSpeed + 2.0f);
+    assert(maxHeight > 0.25f);
 
     std::cout << "game_world_sim: OK\n";
     return 0;
