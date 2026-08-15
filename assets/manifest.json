@@ -1,7 +1,7 @@
 {
-  "version": 2,
+  "version": 3,
   "units": "runtime meters after import scaling",
-  "note": "Triangle counts reflect the latest optimized Nomad exports supplied for the V0.1 prototype. Binary GLB files still need to be placed at target_path before scene rendering can use them.",
+  "note": "Source assets supplied for the We Beast prototype. Binary GLB/PNG/MP3 files are tracked by target_path; source files must be present before conversion/runtime packaging.",
   "assets": [
     {
       "id": "player_dummy",
@@ -17,6 +17,14 @@
       "target_path": "assets/source/maps/map_01.glb",
       "role": "arena_static",
       "source_triangles": 2282,
+      "runtime_status": "prototype_ready"
+    },
+    {
+      "id": "map_02",
+      "source_file": "map 2.glb",
+      "target_path": "assets/source/maps/map_02.glb",
+      "role": "arena_static_vehicle_hazard",
+      "source_triangles": 29172,
       "runtime_status": "prototype_ready"
     },
     {
@@ -107,6 +115,62 @@
       "role": "static_gameplay_geometry",
       "source_triangles": 522,
       "collision": "compound_boxes",
+      "runtime_status": "prototype_ready"
+    },
+    {
+      "id": "ramp_01",
+      "source_file": "Rampe.glb",
+      "target_path": "assets/source/decor/ramp_01.glb",
+      "role": "static_gameplay_geometry",
+      "source_triangles": 7936,
+      "collision": "simple_boxes",
+      "runtime_status": "prototype_ready"
+    },
+    {
+      "id": "title_background",
+      "source_file": "title background.png",
+      "target_path": "assets/source/ui/title/title_background.png",
+      "role": "title_screen_background",
+      "source_size": [1536, 864],
+      "runtime_status": "prototype_ready"
+    },
+    {
+      "id": "title_logo",
+      "source_file": "Title.png",
+      "target_path": "assets/source/ui/title/title_logo.png",
+      "role": "title_screen_logo",
+      "source_size": [1536, 512],
+      "runtime_status": "prototype_ready"
+    },
+    {
+      "id": "title_play",
+      "source_file": "Play.png",
+      "target_path": "assets/source/ui/title/play.png",
+      "role": "title_screen_button_normal",
+      "source_size": [1536, 358],
+      "runtime_status": "prototype_ready"
+    },
+    {
+      "id": "title_play_pressed",
+      "source_file": "Play presed.png",
+      "target_path": "assets/source/ui/title/play_pressed.png",
+      "role": "title_screen_button_selected",
+      "source_size": [1536, 358],
+      "runtime_status": "prototype_ready"
+    },
+    {
+      "id": "title_options",
+      "source_file": "Option.png",
+      "target_path": "assets/source/ui/title/options.png",
+      "role": "title_screen_button_normal",
+      "source_size": [1536, 358],
+      "runtime_status": "prototype_ready"
+    },
+    {
+      "id": "car_honk",
+      "source_file": "Goofy ahh car honk sound effect.mp3",
+      "target_path": "assets/source/audio/car_honk.mp3",
+      "role": "map_02_vehicle_warning_sfx",
       "runtime_status": "prototype_ready"
     }
   ]
