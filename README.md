@@ -7,7 +7,7 @@ Jeu de combat physique 3D original pensé pour **Wii U**, inspiré par les party
 Le projet a maintenant deux couches :
 
 1. un **cœur gameplay C++ portable**, testable sur PC ;
-2. une première **cible native Wii U/WUT** (`webeast_wiiu.rpx`).
+2. une première **cible native Wii U/WUT + GX2** (`webeast_wiiu.rpx`).
 
 Déjà implémenté :
 
@@ -20,7 +20,10 @@ Déjà implémenté :
 - rebonds et impulsions aléatoires de la Ball ;
 - impact violent de la Ball = élimination ;
 - détection de fin de manche / dernier joueur vivant ;
-- premier harness Wii U : stick gauche = déplacement, `A` = saut, `-` = reset ;
+- contrôles GamePad : stick gauche = déplacement, `A` = saut, `-` = reset ;
+- premier **rendu GX2 sur TV + GamePad** ;
+- vue de debug de Map 1 avec joueur et Ball synchronisés au `GameWorld` ;
+- convertisseur `tools/glb_to_wbm.py` pour transformer les GLB Nomad en meshes runtime légers ;
 - tests C++ PC + workflow GitHub Actions.
 
 ## Assets V0.1
@@ -39,7 +42,17 @@ Les dernières versions optimisées sont référencées dans `assets/manifest.js
 - rambarde ;
 - poubelle (ancienne version encore à optimiser).
 
-> Les GLB sont les assets source. Le connecteur utilisé pour développer le dépôt ne permet pas encore d'envoyer directement ces binaires : ils doivent encore être placés dans les chemins `target_path` indiqués dans `assets/manifest.json` avant le rendu 3D réel.
+Les GLB restent les **masters éditables**. Pour le runtime Wii U, le format `WBM1` conserve un mesh indexé, les couleurs de sommet et les UV sans embarquer toute la structure glTF.
+
+Exemples avec les exports optimisés actuels :
+
+```text
+Map 1   ~6 Mo GLB  -> ~64 Ko WBM (géométrie)
+Dummy   ~642 Ko    -> ~568 Ko WBM
+Ball    ~236 Ko    -> ~203 Ko WBM
+```
+
+Les textures de Map 1 seront traitées séparément dans la passe texture GX2.
 
 ## Random Ball
 
@@ -53,6 +66,21 @@ La balle est un danger autonome de Map 1 :
 
 Les paramètres se trouvent dans `RandomBallConfig`.
 
+## Rendu Wii U V0.1
+
+Le premier rendu GX2 est volontairement simple afin de valider le hardware avant le chargement des modèles complets :
+
+```text
+Grand carré vert/jaune : arène de debug
+Carré bleu             : joueur
+Carré gris             : joueur éliminé
+Losange rouge/orange   : Random Ball
+```
+
+La scène est rendue simultanément sur **la télévision et l'écran du Wii U GamePad**.
+
+Voir `docs/WIIU_TEST_01.md` pour le layout SD et le test hardware.
+
 ## Contrôles Wii U actuels
 
 ```text
@@ -60,8 +88,6 @@ Stick gauche  déplacement
 A             saut
 -             recommencer le test
 ```
-
-Il s'agit encore d'un **harness gameplay** : les coordonnées du joueur et de la Ball sont affichées dans la console WUT. Le rendu GX2 de Map 1 et des GLB est la prochaine étape.
 
 ## Compiler les tests sur PC
 
@@ -73,7 +99,7 @@ ctest --test-dir build --output-on-failure
 
 ## Compiler pour Wii U
 
-WUT recommande l'environnement `wiiu-dev` de devkitPro. Une fois installé :
+Avec devkitPro + WUT :
 
 ```bash
 mkdir -p build-wiiu
@@ -88,25 +114,33 @@ La cible Wii U produit :
 webeast_wiiu.rpx
 ```
 
+Le shader GX2 requis est versionné dans :
+
+```text
+assets/runtime/shaders/pos_col_shader.gsh
+```
+
 ## Organisation
 
 ```text
 assets/manifest.json          inventaire des modèles et budget géométrique
+assets/runtime/               données converties pour le runtime Wii U
 config/                       réglages des maps/gameplay
 src/game/                     gameplay indépendant du rendu
 src/math/                     mathématiques légères
-src/platform/wiiu/            couche native WUT/GamePad
+src/platform/wiiu/            WUT, VPAD et GX2
+tools/                        pipeline de conversion des assets
 tests/                        simulations/tests PC
 .github/workflows/            CI des tests gameplay
 ```
 
 ## Prochain jalon
 
-**V0.1 visuelle Wii U** :
+**V0.2 visuelle** :
 
-1. intégrer les GLB optimisés dans le dépôt ;
-2. convertir les meshes/textures vers un format runtime adapté ;
-3. initialiser le rendu GX2 ;
-4. afficher Map 1, Dummy et Ball ;
-5. synchroniser leur transform avec `GameWorld` ;
-6. ajouter les premiers objets physiques saisissables.
+1. charger les fichiers `WBM1` depuis la SD ;
+2. remplacer les formes de debug par `Map 1`, `Dummy` et `Ball` ;
+3. ajouter la caméra 3D ;
+4. convertir/appliquer les textures de Map 1 ;
+5. ajouter les accessoires physiques ;
+6. commencer le véritable corps physique/ragdoll et la saisie avec les mains.
