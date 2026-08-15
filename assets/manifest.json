@@ -1,31 +1,32 @@
 {
-  "version": 1,
+  "version": 2,
   "units": "runtime meters after import scaling",
+  "note": "Triangle counts reflect the latest optimized Nomad exports supplied for the V0.1 prototype. Binary GLB files still need to be placed at target_path before scene rendering can use them.",
   "assets": [
     {
       "id": "player_dummy",
       "source_file": "Dummy 1.glb",
       "target_path": "assets/source/player/dummy.glb",
       "role": "player_visual_source",
-      "source_triangles": 163100,
-      "runtime_status": "needs_optimization"
+      "source_triangles": 21438,
+      "runtime_status": "prototype_ready"
     },
     {
       "id": "map_01",
       "source_file": "Map 1.glb",
       "target_path": "assets/source/maps/map_01.glb",
       "role": "arena_static",
-      "source_triangles": 713984,
-      "runtime_status": "needs_optimization"
+      "source_triangles": 2282,
+      "runtime_status": "prototype_ready"
     },
     {
       "id": "random_ball",
       "source_file": "Ball.glb",
       "target_path": "assets/source/props/ball.glb",
       "role": "lethal_dynamic_sphere",
-      "source_triangles": 196608,
+      "source_triangles": 7764,
       "collision": "sphere",
-      "runtime_status": "needs_strong_optimization"
+      "runtime_status": "prototype_ready"
     },
     {
       "id": "big_box",
@@ -34,25 +35,25 @@
       "role": "dynamic_throwable",
       "source_triangles": 224,
       "collision": "box",
-      "runtime_status": "good"
+      "runtime_status": "prototype_ready"
     },
     {
       "id": "construction_cone",
       "source_file": "Cone de chantier.glb",
       "target_path": "assets/source/props/construction_cone.glb",
-      "role": "dynamic_prop",
-      "source_triangles": 11408,
+      "role": "dynamic_throwable",
+      "source_triangles": 5488,
       "collision": "compound_box_capsule",
-      "runtime_status": "optimize_later"
+      "runtime_status": "prototype_ready"
     },
     {
       "id": "explosive_barrel",
       "source_file": "Explosive baril.glb",
       "target_path": "assets/source/props/explosive_barrel.glb",
       "role": "dynamic_explosive_prop",
-      "source_triangles": 11088,
+      "source_triangles": 2166,
       "collision": "capsule",
-      "runtime_status": "optimize_later"
+      "runtime_status": "prototype_ready"
     },
     {
       "id": "throwable_box_01",
@@ -61,7 +62,7 @@
       "role": "dynamic_throwable",
       "source_triangles": 224,
       "collision": "box",
-      "runtime_status": "good"
+      "runtime_status": "prototype_ready"
     },
     {
       "id": "trashcan",
@@ -70,7 +71,43 @@
       "role": "dynamic_prop",
       "source_triangles": 31320,
       "collision": "capsule",
-      "runtime_status": "needs_optimization"
+      "runtime_status": "optimize_later"
+    },
+    {
+      "id": "park_bench",
+      "source_file": "Banc de parc.glb",
+      "target_path": "assets/source/decor/park_bench.glb",
+      "role": "static_decor",
+      "source_triangles": 34402,
+      "collision": "simple_boxes",
+      "runtime_status": "usable_but_optimize_later"
+    },
+    {
+      "id": "stairs_01",
+      "source_file": "escalier.glb",
+      "target_path": "assets/source/decor/stairs_01.glb",
+      "role": "static_gameplay_geometry",
+      "source_triangles": 1774,
+      "collision": "steps_boxes",
+      "runtime_status": "prototype_ready"
+    },
+    {
+      "id": "low_wall_01",
+      "source_file": "Muret.glb",
+      "target_path": "assets/source/decor/low_wall_01.glb",
+      "role": "static_gameplay_geometry",
+      "source_triangles": 5544,
+      "collision": "box",
+      "runtime_status": "prototype_ready"
+    },
+    {
+      "id": "railing_01",
+      "source_file": "Rambarde decor.glb",
+      "target_path": "assets/source/decor/railing_01.glb",
+      "role": "static_gameplay_geometry",
+      "source_triangles": 522,
+      "collision": "compound_boxes",
+      "runtime_status": "prototype_ready"
     }
   ]
 }
