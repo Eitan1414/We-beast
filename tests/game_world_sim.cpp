@@ -91,10 +91,69 @@ int main() {
         assert(prop.type == MapPropType::SmallBox ||
                prop.type == MapPropType::BigBox ||
                prop.type == MapPropType::ExplosiveBarrel);
+        assert(prop.collisionRadius > 0.0f);
         assert(std::fabs(prop.position.x - expected.x) < 0.0001f);
         assert(std::fabs(prop.position.y - expected.y) < 0.0001f);
         assert(std::fabs(prop.position.z - expected.z) < 0.0001f);
     }
+
+    // Gravity must settle every prop on the map instead of leaving it floating.
+    for (int i = 0; i < 120; ++i) {
+        propWorld.update(1.0f / 60.0f, &idle, 1);
+    }
+    for (std::size_t i = 0; i < propWorld.propCount(); ++i) {
+        const SpawnedMapProp& prop = propWorld.prop(i);
+        assert(prop.active);
+        assert(prop.grounded);
+        assert(std::fabs(prop.position.y -
+                         (propConfig.player.floorY + prop.collisionRadius)) < 0.01f);
+    }
+
+    // Walking into a prop must push it horizontally. This gives us the first
+    // real object interaction without needing the grab/throw input system yet.
+    const float propStartX = propWorld.prop(0).position.x;
+    const float propStartZ = propWorld.prop(0).position.z;
+    const float propRadius = propWorld.prop(0).collisionRadius;
+    const float playerRadius = propWorld.player(0).collisionRadius;
+    propWorld.player(0).position = {
+        propStartX - (propRadius + playerRadius + 0.04f),
+        propConfig.player.floorY,
+        propStartZ,
+    };
+    propWorld.player(0).velocity = {};
+
+    PlayerInput pushInput{};
+    pushInput.moveX = 1.0f;
+    for (int i = 0; i < 90; ++i) {
+        propWorld.update(1.0f / 60.0f, &pushInput, 1);
+    }
+    assert(propWorld.prop(0).position.x > propStartX + 0.20f);
+
+    // A Map 2 car pass must also launch props that are sitting in its lane.
+    GameWorldConfig carPropConfig = carConfig;
+    carPropConfig.props.enabled = true;
+    carPropConfig.props.points[0] = {0.0f, 0.20f, carPropConfig.car.laneZ};
+    carPropConfig.props.points[1] = {-2.0f, 0.20f, 4.0f};
+    carPropConfig.props.points[2] = { 0.0f, 0.20f, 4.0f};
+    carPropConfig.props.points[3] = { 2.0f, 0.20f, 4.0f};
+
+    GameWorld carPropWorld(0xA11CEu);
+    carPropWorld.reset(1, carPropConfig);
+    carPropWorld.player(0).position = {0.0f, 0.0f, -3.0f};
+
+    float maxPropHeight = 0.0f;
+    float maxPropHorizontalSpeed = 0.0f;
+    for (int i = 0; i < 90; ++i) {
+        carPropWorld.update(1.0f / 60.0f, &idle, 1);
+        const SpawnedMapProp& prop = carPropWorld.prop(0);
+        maxPropHeight = std::max(maxPropHeight, prop.position.y);
+        maxPropHorizontalSpeed = std::max(maxPropHorizontalSpeed,
+                                          std::fabs(prop.velocity.x));
+    }
+
+    assert(carPropWorld.car().passSerial > 0);
+    assert(maxPropHorizontalSpeed > 4.0f);
+    assert(maxPropHeight > carPropWorld.prop(0).collisionRadius + 0.20f);
 
     std::cout << "game_world_sim: OK\n";
     return 0;
