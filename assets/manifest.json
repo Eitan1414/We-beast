@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "units": "runtime meters after import scaling",
+  "assets": [
+    {
+      "id": "player_dummy",
+      "source_file": "Dummy 1.glb",
+      "target_path": "assets/source/player/dummy.glb",
+      "role": "player_visual_source",
+      "source_triangles": 163100,
+      "runtime_status": "needs_optimization"
+    },
+    {
+      "id": "map_01",
+      "source_file": "Map 1.glb",
+      "target_path": "assets/source/maps/map_01.glb",
+      "role": "arena_static",
+      "source_triangles": 713984,
+      "runtime_status": "needs_optimization"
+    },
+    {
+      "id": "random_ball",
+      "source_file": "Ball.glb",
+      "target_path": "assets/source/props/ball.glb",
+      "role": "lethal_dynamic_sphere",
+      "source_triangles": 196608,
+      "collision": "sphere",
+      "runtime_status": "needs_strong_optimization"
+    },
+    {
+      "id": "big_box",
+      "source_file": "big box.glb",
+      "target_path": "assets/source/props/big_box.glb",
+      "role": "dynamic_throwable",
+      "source_triangles": 224,
+      "collision": "box",
+      "runtime_status": "good"
+    },
+    {
+      "id": "construction_cone",
+      "source_file": "Cone de chantier.glb",
+      "target_path": "assets/source/props/construction_cone.glb",
+      "role": "dynamic_prop",
+      "source_triangles": 11408,
+      "collision": "compound_box_capsule",
+      "runtime_status": "optimize_later"
+    },
+    {
+      "id": "explosive_barrel",
+      "source_file": "Explosive baril.glb",
+      "target_path": "assets/source/props/explosive_barrel.glb",
+      "role": "dynamic_explosive_prop",
+      "source_triangles": 11088,
+      "collision": "capsule",
+      "runtime_status": "optimize_later"
+    },
+    {
+      "id": "throwable_box_01",
+      "source_file": "throwable box 1.glb",
+      "target_path": "assets/source/props/throwable_box_01.glb",
+      "role": "dynamic_throwable",
+      "source_triangles": 224,
+      "collision": "box",
+      "runtime_status": "good"
+    },
+    {
+      "id": "trashcan",
+      "source_file": "Trashcan.glb",
+      "target_path": "assets/source/props/trashcan.glb",
+      "role": "dynamic_prop",
+      "source_triangles": 31320,
+      "collision": "capsule",
+      "runtime_status": "needs_optimization"
+    }
+  ]
+}
