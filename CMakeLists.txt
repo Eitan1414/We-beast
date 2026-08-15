@@ -31,22 +31,15 @@ if(NOT COMMAND wut_create_rpx)
     add_test(NAME wbm_mesh_sim COMMAND wbm_mesh_sim)
 endif()
 
-# Native Wii U/WUT target. It now includes the Map 2 hazard audio path in
-# addition to GX2 rendering and VPAD input.
+# Native Wii U/WUT target. sndcore2 imports are part of WUT's generated import
+# stubs, so no separate libsndcore2.a is required.
 if(COMMAND wut_create_rpx)
     add_executable(webeast_wiiu
         src/platform/wiiu/main.cpp
         src/platform/wiiu/DebugRenderer.cpp
         src/platform/wiiu/HornPlayer.cpp
     )
-
-    # Current devkitPro CMake does not automatically add WUT's import-library
-    # directory for extra RPLs named explicitly here (such as sndcore2).
-    target_link_directories(webeast_wiiu PRIVATE
-        "$ENV{DEVKITPRO}/wut/lib"
-        "$ENV{DEVKITPRO}/portlibs/wiiu/lib"
-    )
-    target_link_libraries(webeast_wiiu PRIVATE webeast_core sndcore2)
+    target_link_libraries(webeast_wiiu PRIVATE webeast_core)
     wut_create_rpx(webeast_wiiu)
 
     install(FILES "${CMAKE_CURRENT_BINARY_DIR}/webeast_wiiu.rpx"
