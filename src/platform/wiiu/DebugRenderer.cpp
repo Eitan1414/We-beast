@@ -6,11 +6,12 @@
 #include <whb/file.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace webeast::wiiu {
 
-bool DebugRenderer::init(const char* shaderPath) {
+bool DebugRenderer::init(const char* shaderPath, const WbmMesh* mapMesh) {
     if (!shaderPath) return false;
 
     char* shaderData = WHBReadWholeFile(shaderPath, nullptr);
@@ -20,25 +21,11 @@ bool DebugRenderer::init(const char* shaderPath) {
     WHBFreeWholeFile(shaderData);
     if (!loaded) return false;
 
-    if (!WHBGfxInitShaderAttribute(&m_shader,
-                                   "aPosition",
-                                   0,
-                                   0,
-                                   GX2_ATTRIB_FORMAT_FLOAT_32_32_32_32)) {
-        WHBGfxFreeShaderGroup(&m_shader);
-        return false;
-    }
-
-    if (!WHBGfxInitShaderAttribute(&m_shader,
-                                   "aColour",
-                                   1,
-                                   0,
-                                   GX2_ATTRIB_FORMAT_FLOAT_32_32_32_32)) {
-        WHBGfxFreeShaderGroup(&m_shader);
-        return false;
-    }
-
-    if (!WHBGfxInitFetchShader(&m_shader)) {
+    if (!WHBGfxInitShaderAttribute(&m_shader, "aPosition", 0, 0,
+                                   GX2_ATTRIB_FORMAT_FLOAT_32_32_32_32) ||
+        !WHBGfxInitShaderAttribute(&m_shader, "aColour", 1, 0,
+                                   GX2_ATTRIB_FORMAT_FLOAT_32_32_32_32) ||
+        !WHBGfxInitFetchShader(&m_shader)) {
         WHBGfxFreeShaderGroup(&m_shader);
         return false;
     }
@@ -51,7 +38,6 @@ bool DebugRenderer::init(const char* shaderPath) {
     m_positionBuffer.flags = flags;
     m_positionBuffer.elemSize = sizeof(float) * 4;
     m_positionBuffer.elemCount = MaxVertices;
-
     m_colourBuffer.flags = flags;
     m_colourBuffer.elemSize = sizeof(float) * 4;
     m_colourBuffer.elemCount = MaxVertices;
@@ -60,36 +46,66 @@ bool DebugRenderer::init(const char* shaderPath) {
         WHBGfxFreeShaderGroup(&m_shader);
         return false;
     }
-
     if (!GX2RCreateBuffer(&m_colourBuffer)) {
         GX2RDestroyBufferEx(&m_positionBuffer, 0);
         WHBGfxFreeShaderGroup(&m_shader);
         return false;
     }
 
+    m_positions.reserve(MaxVertices * 4);
+    m_colours.reserve(MaxVertices * 4);
+    m_mapMesh = mapMesh;
     m_ready = true;
     return true;
 }
 
 void DebugRenderer::shutdown() {
     if (!m_ready) return;
-
     GX2RDestroyBufferEx(&m_positionBuffer, 0);
     GX2RDestroyBufferEx(&m_colourBuffer, 0);
     WHBGfxFreeShaderGroup(&m_shader);
+    m_positions.clear();
+    m_colours.clear();
+    m_mapMesh = nullptr;
     m_ready = false;
 }
 
 float DebugRenderer::worldToClipX(float x) const {
-    return std::clamp(x / 8.0f, -0.95f, 0.95f);
+    return std::clamp((x / 6.5f) * 0.88f, -0.94f, 0.94f);
 }
 
 float DebugRenderer::worldToClipY(float z) const {
-    return std::clamp(-z / 8.0f, -0.95f, 0.95f);
+    return std::clamp((-z / 6.5f) * 0.88f, -0.94f, 0.94f);
+}
+
+float DebugRenderer::mapToClipX(float x) const {
+    if (!m_mapMesh || !m_mapMesh->valid()) return 0.0f;
+    const WbmBounds& b = m_mapMesh->bounds();
+    const float width = b.maxX - b.minX;
+    if (std::fabs(width) < 0.000001f) return 0.0f;
+    return (((x - b.minX) / width) * 2.0f - 1.0f) * 0.88f;
+}
+
+float DebugRenderer::mapToClipY(float z) const {
+    if (!m_mapMesh || !m_mapMesh->valid()) return 0.0f;
+    const WbmBounds& b = m_mapMesh->bounds();
+    const float depth = b.maxZ - b.minZ;
+    if (std::fabs(depth) < 0.000001f) return 0.0f;
+    return -(((z - b.minZ) / depth) * 2.0f - 1.0f) * 0.88f;
 }
 
 void DebugRenderer::beginGeometry() {
     m_vertexCount = 0;
+    m_positions.clear();
+    m_colours.clear();
+}
+
+void DebugRenderer::appendVertex(float x, float y,
+                                 float r, float g, float b, float a) {
+    if (m_vertexCount >= MaxVertices) return;
+    m_positions.insert(m_positions.end(), {x, y, 0.0f, 1.0f});
+    m_colours.insert(m_colours.end(), {r, g, b, a});
+    ++m_vertexCount;
 }
 
 void DebugRenderer::addTriangle(float ax, float ay,
@@ -97,24 +113,9 @@ void DebugRenderer::addTriangle(float ax, float ay,
                                 float cx, float cy,
                                 float r, float g, float b, float a) {
     if (m_vertexCount + 3 > MaxVertices) return;
-
-    const float positions[12] = {
-        ax, ay, 0.0f, 1.0f,
-        bx, by, 0.0f, 1.0f,
-        cx, cy, 0.0f, 1.0f,
-    };
-
-    std::memcpy(&m_positions[m_vertexCount * 4], positions, sizeof(positions));
-
-    for (std::uint32_t i = 0; i < 3; ++i) {
-        float* colour = &m_colours[(m_vertexCount + i) * 4];
-        colour[0] = r;
-        colour[1] = g;
-        colour[2] = b;
-        colour[3] = a;
-    }
-
-    m_vertexCount += 3;
+    appendVertex(ax, ay, r, g, b, a);
+    appendVertex(bx, by, r, g, b, a);
+    appendVertex(cx, cy, r, g, b, a);
 }
 
 void DebugRenderer::addQuad(float minX, float minY,
@@ -126,37 +127,63 @@ void DebugRenderer::addQuad(float minX, float minY,
 
 void DebugRenderer::addDiamond(float cx, float cy, float radius,
                                float r, float g, float b, float a) {
-    addTriangle(cx, cy + radius,
-                cx + radius, cy,
-                cx, cy - radius,
-                r, g, b, a);
-    addTriangle(cx, cy + radius,
-                cx, cy - radius,
-                cx - radius, cy,
-                r, g, b, a);
+    addTriangle(cx, cy + radius, cx + radius, cy, cx, cy - radius, r, g, b, a);
+    addTriangle(cx, cy + radius, cx, cy - radius, cx - radius, cy, r, g, b, a);
+}
+
+void DebugRenderer::addMapMesh() {
+    if (!m_mapMesh || !m_mapMesh->valid()) {
+        addQuad(-0.88f, -0.88f, 0.88f, 0.88f, 0.23f, 0.47f, 0.28f, 1.0f);
+        return;
+    }
+
+    const auto& vertices = m_mapMesh->vertices();
+    const auto& indices = m_mapMesh->indices();
+
+    for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
+        if (m_vertexCount + 3 > MaxVertices) break;
+
+        const WbmVertex& a = vertices[indices[i]];
+        const WbmVertex& b = vertices[indices[i + 1]];
+        const WbmVertex& c = vertices[indices[i + 2]];
+
+        // In the top-down V0.1 renderer, only upward-facing surfaces are useful.
+        // This also prevents the carpet/box side walls from painting over its top.
+        const float ux = b.x - a.x;
+        const float uz = b.z - a.z;
+        const float vx = c.x - a.x;
+        const float vz = c.z - a.z;
+        const float normalY = uz * vx - ux * vz;
+        if (normalY <= 0.0000001f) continue;
+
+        const WbmVertex* tri[3] = {&a, &b, &c};
+        for (const WbmVertex* v : tri) {
+            appendVertex(mapToClipX(v->x), mapToClipY(v->z),
+                         v->r / 255.0f, v->g / 255.0f,
+                         v->b / 255.0f, v->a / 255.0f);
+        }
+    }
 }
 
 void DebugRenderer::uploadGeometry() {
     if (m_vertexCount == 0) return;
-
     const std::size_t byteCount = static_cast<std::size_t>(m_vertexCount) * sizeof(float) * 4;
 
     void* positionData = GX2RLockBufferEx(&m_positionBuffer, 0);
     if (positionData) {
-        std::memcpy(positionData, m_positions, byteCount);
+        std::memcpy(positionData, m_positions.data(), byteCount);
         GX2RUnlockBufferEx(&m_positionBuffer, 0);
     }
 
     void* colourData = GX2RLockBufferEx(&m_colourBuffer, 0);
     if (colourData) {
-        std::memcpy(colourData, m_colours, byteCount);
+        std::memcpy(colourData, m_colours.data(), byteCount);
         GX2RUnlockBufferEx(&m_colourBuffer, 0);
     }
 }
 
 void DebugRenderer::drawCurrentGeometry() {
     if (m_vertexCount == 0) return;
-
     GX2SetFetchShader(&m_shader.fetchShader);
     GX2SetVertexShader(m_shader.vertexShader);
     GX2SetPixelShader(m_shader.pixelShader);
@@ -169,59 +196,38 @@ void DebugRenderer::draw(const GameWorld& world) {
     if (!m_ready) return;
 
     beginGeometry();
+    addMapMesh();
 
-    // Simplified top-down representation of Map 1. This is deliberately
-    // procedural: it validates GX2 + gameplay transforms before GLB rendering.
-    addQuad(-0.82f, -0.82f, 0.82f, 0.82f,
-            0.23f, 0.47f, 0.28f, 1.0f);
-
-    // Border of the playable support area.
-    constexpr float border = 0.018f;
-    addQuad(-0.82f, 0.82f - border, 0.82f, 0.82f,
-            0.92f, 0.75f, 0.24f, 1.0f);
-    addQuad(-0.82f, -0.82f, 0.82f, -0.82f + border,
-            0.92f, 0.75f, 0.24f, 1.0f);
-    addQuad(-0.82f, -0.82f, -0.82f + border, 0.82f,
-            0.92f, 0.75f, 0.24f, 1.0f);
-    addQuad(0.82f - border, -0.82f, 0.82f, 0.82f,
-            0.92f, 0.75f, 0.24f, 1.0f);
-
+    // Player and Ball stay as clear debug markers until their WBM meshes are
+    // connected. They are drawn last so they remain readable over Map 1.
     for (std::size_t i = 0; i < world.playerCount(); ++i) {
         const PlayerState& player = world.player(i);
         const float x = worldToClipX(player.position.x);
         const float y = worldToClipY(player.position.z);
-        const float size = 0.055f + std::clamp(player.position.y, 0.0f, 3.0f) * 0.006f;
-
+        const float size = 0.045f + std::clamp(player.position.y, 0.0f, 3.0f) * 0.006f;
         if (player.eliminated) {
-            addQuad(x - size, y - size, x + size, y + size,
-                    0.25f, 0.25f, 0.25f, 1.0f);
+            addQuad(x - size, y - size, x + size, y + size, 0.18f, 0.18f, 0.18f, 1.0f);
         } else {
-            addQuad(x - size, y - size, x + size, y + size,
-                    0.25f, 0.60f, 1.0f, 1.0f);
+            addQuad(x - size, y - size, x + size, y + size, 0.15f, 0.55f, 1.0f, 1.0f);
         }
     }
 
-    const Vec3& ballPosition = world.ball().position();
-    const float ballX = worldToClipX(ballPosition.x);
-    const float ballY = worldToClipY(ballPosition.z);
-    const float ballSize = 0.050f + std::clamp(ballPosition.y, 0.0f, 6.0f) * 0.004f;
-    addDiamond(ballX, ballY, ballSize,
-               1.0f, 0.28f, 0.16f, 1.0f);
+    const Vec3& ball = world.ball().position();
+    addDiamond(worldToClipX(ball.x), worldToClipY(ball.z), 0.045f,
+               1.0f, 0.18f, 0.10f, 1.0f);
 
     uploadGeometry();
 
     WHBGfxBeginRender();
-
     WHBGfxBeginRenderTV();
-    WHBGfxClearColor(0.055f, 0.065f, 0.085f, 1.0f);
+    WHBGfxClearColor(0.035f, 0.040f, 0.055f, 1.0f);
     drawCurrentGeometry();
     WHBGfxFinishRenderTV();
 
     WHBGfxBeginRenderDRC();
-    WHBGfxClearColor(0.055f, 0.065f, 0.085f, 1.0f);
+    WHBGfxClearColor(0.035f, 0.040f, 0.055f, 1.0f);
     drawCurrentGeometry();
     WHBGfxFinishRenderDRC();
-
     WHBGfxFinishRender();
 }
 
