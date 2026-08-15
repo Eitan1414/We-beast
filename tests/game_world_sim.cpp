@@ -8,7 +8,10 @@ using namespace webeast;
 
 int main() {
     GameWorldConfig config{};
-    config.ball.lethalRelativeSpeed = 7.0f;
+
+    // This test is specifically about movement/fall elimination. Keep the
+    // autonomous Ball from randomly ending the player during the test.
+    config.ball.lethalRelativeSpeed = 1000.0f;
 
     GameWorld world(12345u);
     world.reset(2, config);
