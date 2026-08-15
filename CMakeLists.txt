@@ -26,16 +26,18 @@ if(NOT COMMAND wut_create_rpx)
     add_test(NAME game_world_sim COMMAND game_world_sim)
 endif()
 
-# When configured through devkitPro's powerpc-eabi-cmake, WUT provides this
-# helper. The first Wii U target is intentionally a hardware gameplay harness:
-# GamePad input + fixed-step world + Random Ball. GX2 scene rendering follows.
+# Native Wii U/WUT target. V0.1 renders a lightweight top-down GX2 debug view
+# of Map 1, the player and Random Ball to both the TV and the GamePad.
 if(COMMAND wut_create_rpx)
     add_executable(webeast_wiiu
         src/platform/wiiu/main.cpp
+        src/platform/wiiu/DebugRenderer.cpp
     )
     target_link_libraries(webeast_wiiu PRIVATE webeast_core)
     wut_create_rpx(webeast_wiiu)
 
     install(FILES "${CMAKE_CURRENT_BINARY_DIR}/webeast_wiiu.rpx"
             DESTINATION "${CMAKE_INSTALL_PREFIX}")
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/runtime/shaders/pos_col_shader.gsh"
+            DESTINATION "${CMAKE_INSTALL_PREFIX}/content")
 endif()
