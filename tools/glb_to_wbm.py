@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert simple GLB 2.0 meshes to the We Beast WBM1 runtime format."""
+"""Convert GLB 2.0 meshes to the small We Beast WBM1 runtime format."""
 
 import argparse
 import json
@@ -68,59 +68,8 @@ def _scan_json_value(text, start):
     return i
 
 
-def _strip_named_members(text, member_name):
-    """Remove every object member with this name without parsing its value.
-
-    Nomad Sculpt stores large private `extras` objects both at the glTF root and
-    inside meshes/nodes. They are not needed by We Beast and some Nomad exports
-    contain non-strict JSON in those private blocks. Geometry members remain
-    byte-for-byte represented by the same JSON values and BIN chunk.
-    """
-    needle = json.dumps(member_name)
-    search_from = 0
-
-    while True:
-        key_start = text.find(needle, search_from)
-        if key_start < 0:
-            return text
-
-        colon = key_start + len(needle)
-        while colon < len(text) and text[colon].isspace():
-            colon += 1
-        if colon >= len(text) or text[colon] != ":":
-            search_from = key_start + len(needle)
-            continue
-
-        value_start = colon + 1
-        while value_start < len(text) and text[value_start].isspace():
-            value_start += 1
-        try:
-            value_end = _scan_json_value(text, value_start)
-        except ValueError:
-            search_from = key_start + len(needle)
-            continue
-
-        after = value_end
-        while after < len(text) and text[after].isspace():
-            after += 1
-
-        if after < len(text) and text[after] == ",":
-            # First/middle member: consume its following comma.
-            text = text[:key_start] + text[after + 1:]
-            search_from = max(0, key_start - 1)
-            continue
-
-        before = key_start
-        while before > 0 and text[before - 1].isspace():
-            before -= 1
-        if before > 0 and text[before - 1] == ",":
-            before -= 1
-        text = text[:before] + text[value_end:]
-        search_from = max(0, before - 1)
-
-
 def _top_level_members_loose(text):
-    """Split the glTF root object without validating individual values."""
+    """Split a glTF root object without validating its member values."""
     members = {}
     i = 0
     while i < len(text) and text[i].isspace():
@@ -156,43 +105,94 @@ def _top_level_members_loose(text):
     return members
 
 
-def _load_loose_member(raw, key, required=False):
-    if key not in raw:
+def _load_member(raw, key, required=False):
+    value = raw.get(key)
+    if value is None:
         if required:
             raise ValueError(f"GLB is missing required glTF field {key!r}")
         return None
-
-    value = raw[key]
     try:
         return json.loads(value)
-    except json.JSONDecodeError as first_error:
-        cleaned = _strip_named_members(value, "extras")
+    except json.JSONDecodeError as exc:
+        if required:
+            context = value[max(0, exc.pos - 100):exc.pos + 100]
+            raise ValueError(
+                f"glTF field {key!r} is malformed near offset {exc.pos}: {context!r}"
+            ) from exc
+        return None
+
+
+def _recover_meshes(raw_meshes):
+    """Recover standard primitive arrays while ignoring private mesh metadata.
+
+    Nomad Sculpt 1.10 files seen in this project can contain malformed JSON in
+    mesh-level `extras.nomad`, before a perfectly valid `primitives` member.
+    WBM only needs those primitives, so find and parse them independently.
+    """
+    meshes = []
+    needle = '"primitives"'
+    search_from = 0
+
+    while True:
+        key = raw_meshes.find(needle, search_from)
+        if key < 0:
+            break
+        colon = key + len(needle)
+        while colon < len(raw_meshes) and raw_meshes[colon].isspace():
+            colon += 1
+        if colon >= len(raw_meshes) or raw_meshes[colon] != ":":
+            search_from = key + len(needle)
+            continue
+
+        start = colon + 1
+        while start < len(raw_meshes) and raw_meshes[start].isspace():
+            start += 1
+        if start >= len(raw_meshes) or raw_meshes[start] != "[":
+            search_from = key + len(needle)
+            continue
+
         try:
-            return json.loads(cleaned)
-        except json.JSONDecodeError as exc:
-            if required:
-                context = cleaned[max(0, exc.pos - 100):exc.pos + 100]
-                raise ValueError(
-                    f"Nomad GLB standard field {key!r} is malformed near "
-                    f"offset {exc.pos}: {context!r}"
-                ) from exc
-            return None
+            end = _scan_json_value(raw_meshes, start)
+            primitives = json.loads(raw_meshes[start:end])
+        except (ValueError, json.JSONDecodeError):
+            search_from = key + len(needle)
+            continue
+
+        if isinstance(primitives, list) and primitives:
+            meshes.append({"primitives": primitives})
+        search_from = max(end, key + len(needle))
+
+    if not meshes:
+        raise ValueError("Could not recover any valid mesh primitives from Nomad GLB")
+    return meshes
 
 
 def _minimal_gltf_from_loose_json(text):
     raw = _top_level_members_loose(text)
-    result = {}
+    result = {
+        "accessors": _load_member(raw, "accessors", required=True),
+        "bufferViews": _load_member(raw, "bufferViews", required=True),
+    }
 
-    for key in ("accessors", "bufferViews", "meshes", "nodes"):
-        result[key] = _load_loose_member(raw, key, required=True)
+    meshes = _load_member(raw, "meshes")
+    if not isinstance(meshes, list) or not meshes:
+        meshes = _recover_meshes(raw.get("meshes", ""))
+    result["meshes"] = meshes
+
+    nodes = _load_member(raw, "nodes")
+    if not isinstance(nodes, list) or not nodes:
+        # The renderer normalises prop scale from WBM bounds, so identity nodes
+        # are a safe recovery when only Nomad's node metadata is malformed.
+        nodes = [{"mesh": index} for index in range(len(meshes))]
+    result["nodes"] = nodes
 
     for key in ("scene", "scenes", "buffers", "asset"):
-        value = _load_loose_member(raw, key)
+        value = _load_member(raw, key)
         if value is not None:
             result[key] = value
 
-    materials = _load_loose_member(raw, "materials")
-    result["materials"] = materials if materials is not None else []
+    materials = _load_member(raw, "materials")
+    result["materials"] = materials if isinstance(materials, list) else []
     return result
 
 
@@ -201,14 +201,7 @@ def _decode_gltf_json(chunk):
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # First try the simplest repair: remove all optional Nomad extras from
-        # the complete glTF JSON. If another private area is odd, fall back to
-        # extracting only the standard fields needed by the converter.
-        cleaned = _strip_named_members(text, "extras")
-        try:
-            return json.loads(cleaned)
-        except json.JSONDecodeError:
-            return _minimal_gltf_from_loose_json(text)
+        return _minimal_gltf_from_loose_json(text)
 
 
 def load_glb(path):
@@ -318,13 +311,15 @@ def scene_nodes(gltf):
     scene_index = gltf.get("scene", 0)
     fallback = {"nodes": list(range(len(gltf.get("nodes", []))))}
     scenes = gltf.get("scenes") or [fallback]
-    if scene_index < 0 or scene_index >= len(scenes):
+    if not isinstance(scene_index, int) or scene_index < 0 or scene_index >= len(scenes):
         scene_index = 0
     roots = scenes[scene_index].get("nodes", [])
     nodes = gltf.get("nodes", [])
     result = []
 
     def visit(index, parent):
+        if index < 0 or index >= len(nodes):
+            return
         world = matrix_multiply(parent, node_matrix(nodes[index]))
         result.append((index, world))
         for child in nodes[index].get("children", []):
@@ -332,6 +327,11 @@ def scene_nodes(gltf):
 
     for root in roots:
         visit(root, identity_matrix())
+
+    if not result:
+        for index, node in enumerate(nodes):
+            if "mesh" in node:
+                result.append((index, node_matrix(node)))
     return result
 
 
@@ -339,7 +339,7 @@ def material_factor(gltf, material_index):
     if material_index is None:
         return (1, 1, 1, 1)
     materials = gltf.get("materials", [])
-    if material_index < 0 or material_index >= len(materials):
+    if not isinstance(material_index, int) or material_index < 0 or material_index >= len(materials):
         return (1, 1, 1, 1)
     material = materials[material_index]
     return tuple(
@@ -358,13 +358,18 @@ def convert(source, destination):
         node = gltf["nodes"][node_index]
         if "mesh" not in node:
             continue
+        mesh_index = node["mesh"]
+        if mesh_index < 0 or mesh_index >= len(gltf["meshes"]):
+            continue
 
-        mesh = gltf["meshes"][node["mesh"]]
+        mesh = gltf["meshes"][mesh_index]
         for primitive in mesh.get("primitives", []):
             if primitive.get("mode", 4) != 4:
                 raise ValueError("Only triangle primitives are supported")
 
             attributes = primitive.get("attributes", {})
+            if "POSITION" not in attributes:
+                continue
             positions = accessor_values(gltf, blob, attributes["POSITION"])
             colours = (
                 accessor_values(gltf, blob, attributes["COLOR_0"])
@@ -440,7 +445,7 @@ def convert(source, destination):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Convert a simple GLB 2.0 mesh to We Beast WBM1."
+        description="Convert a GLB 2.0 mesh to We Beast WBM1."
     )
     parser.add_argument("input")
     parser.add_argument("output")
