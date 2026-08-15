@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(webeast_core
+    src/assets/WbmMesh.cpp
     src/game/RandomBall.cpp
     src/game/PlayerController.cpp
     src/game/GameWorld.cpp
@@ -13,7 +14,7 @@ add_library(webeast_core
 target_include_directories(webeast_core PUBLIC src)
 
 # Host-side simulations/tests. These stay buildable on PC so gameplay and
-# physics rules can be checked without deploying to a Wii U for every change.
+# runtime asset parsing can be checked without deploying to a Wii U each time.
 if(NOT COMMAND wut_create_rpx)
     enable_testing()
 
@@ -24,10 +25,14 @@ if(NOT COMMAND wut_create_rpx)
     add_executable(game_world_sim tests/game_world_sim.cpp)
     target_link_libraries(game_world_sim PRIVATE webeast_core)
     add_test(NAME game_world_sim COMMAND game_world_sim)
+
+    add_executable(wbm_mesh_sim tests/wbm_mesh_sim.cpp)
+    target_link_libraries(wbm_mesh_sim PRIVATE webeast_core)
+    add_test(NAME wbm_mesh_sim COMMAND wbm_mesh_sim)
 endif()
 
-# Native Wii U/WUT target. V0.1 renders a lightweight top-down GX2 debug view
-# of Map 1, the player and Random Ball to both the TV and the GamePad.
+# Native Wii U/WUT target. V0.1 loads the generated Map 1 WBM asset and renders
+# it with GX2 to both TV and GamePad, while gameplay stays in GameWorld.
 if(COMMAND wut_create_rpx)
     add_executable(webeast_wiiu
         src/platform/wiiu/main.cpp
