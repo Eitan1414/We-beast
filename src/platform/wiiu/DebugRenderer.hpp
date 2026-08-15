@@ -34,6 +34,7 @@ private:
                     float r, float g, float b, float a = 1.0f);
     void addMapMesh();
     void addCarHazard(const GameWorld& world);
+    void addSpawnedProps(const GameWorld& world);
     void addTitleGeometry(std::uint32_t selectedItem, bool optionsOpen);
     void uploadGeometry();
     void drawCurrentGeometry();
