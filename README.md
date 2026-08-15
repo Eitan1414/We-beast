@@ -2,94 +2,74 @@
 
 Jeu de combat physique 3D original pensé pour **Wii U**, inspiré par les party-brawlers à personnages ragdoll.
 
-## État actuel — V0.1
+## État actuel — V0.1 visuelle
 
-Le projet a maintenant deux couches :
+Le projet a maintenant :
 
-1. un **cœur gameplay C++ portable**, testable sur PC ;
-2. une première **cible native Wii U/WUT + GX2** (`webeast_wiiu.rpx`).
+1. un **cœur gameplay C++ portable** ;
+2. un format runtime maison **WBM1** ;
+3. une cible native **Wii U / WUT / GX2** (`webeast_wiiu.rpx`).
 
 Déjà implémenté :
 
 - simulation gameplay à pas fixe **60 Hz** ;
-- déplacement analogique du joueur ;
-- gravité et saut ;
-- sortie de la plateforme / chute sous la kill-plane = élimination ;
-- jusqu'à 4 états joueurs dans `GameWorld` ;
-- obstacle spécial **Random Ball** ;
-- rebonds et impulsions aléatoires de la Ball ;
-- impact violent de la Ball = élimination ;
-- détection de fin de manche / dernier joueur vivant ;
-- contrôles GamePad : stick gauche = déplacement, `A` = saut, `-` = reset ;
-- premier **rendu GX2 sur TV + GamePad** ;
-- vue de debug de Map 1 avec joueur et Ball synchronisés au `GameWorld` ;
-- convertisseur `tools/glb_to_wbm.py` pour transformer les GLB Nomad en meshes runtime légers ;
-- tests C++ PC + workflow GitHub Actions.
+- déplacement analogique, gravité et saut ;
+- chute hors de Map 1 = élimination ;
+- jusqu'à 4 états joueurs ;
+- **Random Ball** avec rebonds/impulsions aléatoires et impact mortel ;
+- détection de fin de manche ;
+- contrôles GamePad : stick gauche, `A`, `-` ;
+- rendu GX2 simultané **TV + GamePad** ;
+- chargeur `WBM1` endian-safe pour le PowerPC big-endian de la Wii U ;
+- chargement de **Map 1 depuis la SD** ;
+- rendu de la vraie géométrie/couleur runtime de Map 1 ;
+- joueur et Ball encore affichés sous forme de marqueurs de debug ;
+- tests C++ PC pour gameplay + parser WBM1.
 
-## Assets V0.1
+## Map 1 et assets runtime
 
-Les dernières versions optimisées sont référencées dans `assets/manifest.json` :
+Les GLB Nomad restent les **masters éditables**. Le jeu ne parse pas directement glTF sur Wii U : les modèles sont convertis hors ligne vers `WBM1`, beaucoup plus simple à charger.
 
-- `Dummy 1.glb` — joueur ;
-- `Map 1.glb` — première arène ;
-- `Ball.glb` — danger autonome ;
-- grosse boîte / boîte lançable ;
-- cône de chantier ;
-- baril explosif ;
-- banc ;
-- escalier ;
-- muret ;
-- rambarde ;
-- poubelle (ancienne version encore à optimiser).
-
-Les GLB restent les **masters éditables**. Pour le runtime Wii U, le format `WBM1` conserve un mesh indexé, les couleurs de sommet et les UV sans embarquer toute la structure glTF.
-
-Exemples avec les exports optimisés actuels :
+Le convertisseur générique est :
 
 ```text
-Map 1   ~6 Mo GLB  -> ~64 Ko WBM (géométrie)
-Dummy   ~642 Ko    -> ~568 Ko WBM
-Ball    ~236 Ko    -> ~203 Ko WBM
+tools/glb_to_wbm.py
 ```
 
-Les textures de Map 1 seront traitées séparément dans la passe texture GX2.
+Pour la première map, `tools/build_map_visual.py` peut aussi créer une version intermédiaire où la texture du tapis est pré-échantillonnée dans les couleurs de sommets. Cela rend la map reconnaissable avant l'arrivée du vrai pipeline de textures GX2.
 
-## Random Ball
+```bash
+python -m pip install pillow
+python tools/build_map_visual.py "Map 1.glb" map_01.wbm --grid 64
+```
 
-La balle est un danger autonome de Map 1 :
-
-- elle rebondit dans l'arène ;
-- sa trajectoire reçoit régulièrement une impulsion aléatoire ;
-- sa vitesse est plafonnée pour garder la simulation stable ;
-- un contact léger n'élimine pas ;
-- un impact suffisamment violent élimine immédiatement le joueur.
-
-Les paramètres se trouvent dans `RandomBallConfig`.
-
-## Rendu Wii U V0.1
-
-Le premier rendu GX2 est volontairement simple afin de valider le hardware avant le chargement des modèles complets :
+Le fichier doit ensuite être placé sur la SD avec le shader :
 
 ```text
-Grand carré vert/jaune : arène de debug
-Carré bleu             : joueur
-Carré gris             : joueur éliminé
-Losange rouge/orange   : Random Ball
+sd:/wiiu/apps/webeast/content/map_01.wbm
+sd:/wiiu/apps/webeast/content/pos_col_shader.gsh
 ```
 
-La scène est rendue simultanément sur **la télévision et l'écran du Wii U GamePad**.
+Le programme accepte aussi le layout de développement :
 
-Voir `docs/WIIU_TEST_01.md` pour le layout SD et le test hardware.
+```text
+sd:/wut/content/map_01.wbm
+sd:/wut/content/pos_col_shader.gsh
+```
 
 ## Contrôles Wii U actuels
 
 ```text
 Stick gauche  déplacement
 A             saut
--             recommencer le test
+-             recommencer la manche
 ```
 
-## Compiler les tests sur PC
+## Random Ball
+
+La Ball est un danger autonome : elle rebondit dans l'arène, reçoit régulièrement une impulsion aléatoire, garde une vitesse plafonnée et élimine le joueur lors d'un impact suffisamment violent.
+
+## Compiler les tests PC
 
 ```bash
 cmake -S . -B build
@@ -108,13 +88,7 @@ cd build-wiiu
 cmake --build . --parallel
 ```
 
-La cible Wii U produit :
-
-```text
-webeast_wiiu.rpx
-```
-
-Le shader GX2 requis est versionné dans :
+La cible produit `webeast_wiiu.rpx`. Le shader GX2 est versionné dans :
 
 ```text
 assets/runtime/shaders/pos_col_shader.gsh
@@ -123,24 +97,17 @@ assets/runtime/shaders/pos_col_shader.gsh
 ## Organisation
 
 ```text
-assets/manifest.json          inventaire des modèles et budget géométrique
-assets/runtime/               données converties pour le runtime Wii U
-config/                       réglages des maps/gameplay
+assets/manifest.json          inventaire des modèles
+assets/runtime/               données runtime/shaders
+config/                       réglages maps/gameplay
+src/assets/                   lecteur WBM1 portable
 src/game/                     gameplay indépendant du rendu
-src/math/                     mathématiques légères
+src/math/                     maths légères
 src/platform/wiiu/            WUT, VPAD et GX2
-tools/                        pipeline de conversion des assets
+tools/                        conversion GLB -> runtime
 tests/                        simulations/tests PC
-.github/workflows/            CI des tests gameplay
 ```
 
 ## Prochain jalon
 
-**V0.2 visuelle** :
-
-1. charger les fichiers `WBM1` depuis la SD ;
-2. remplacer les formes de debug par `Map 1`, `Dummy` et `Ball` ;
-3. ajouter la caméra 3D ;
-4. convertir/appliquer les textures de Map 1 ;
-5. ajouter les accessoires physiques ;
-6. commencer le véritable corps physique/ragdoll et la saisie avec les mains.
+**V0.2 3D** : remplacer le marqueur joueur par `Dummy`, remplacer le losange par la vraie `Ball`, ajouter une caméra 3D, puis brancher objets physiques, saisie et ragdoll actif.
