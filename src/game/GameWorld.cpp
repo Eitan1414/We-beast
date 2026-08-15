@@ -10,8 +10,8 @@ GameWorld::GameWorld(std::uint32_t randomSeed)
       m_randomState((randomSeed ^ 0xC0A4BEEFu) ? (randomSeed ^ 0xC0A4BEEFu) : 1u) {}
 
 float GameWorld::nextRandom01() {
-    // Small deterministic xorshift RNG. It keeps the car sequence independent
-    // from RandomBall while still making hardware tests reproducible.
+    // Small deterministic xorshift RNG. It keeps the car/prop sequence
+    // reproducible for hardware tests while remaining independent of RandomBall.
     m_randomState ^= m_randomState << 13;
     m_randomState ^= m_randomState >> 17;
     m_randomState ^= m_randomState << 5;
@@ -27,6 +27,31 @@ void GameWorld::scheduleNextCar() {
     const float minWait = std::max(0.0f, m_config.car.waitMinSeconds);
     const float maxWait = std::max(minWait, m_config.car.waitMaxSeconds);
     m_car.timer = minWait + (maxWait - minWait) * nextRandom01();
+}
+
+MapPropType GameWorld::randomMapPropType() {
+    const float value = nextRandom01();
+    if (value < (1.0f / 3.0f)) return MapPropType::SmallBox;
+    if (value < (2.0f / 3.0f)) return MapPropType::BigBox;
+    return MapPropType::ExplosiveBarrel;
+}
+
+void GameWorld::spawnMapProps() {
+    m_propCount = 0;
+    for (SpawnedMapProp& prop : m_props) prop = {};
+
+    if (!m_config.props.enabled) return;
+
+    // Map 2 rule: the four donut markers are the ONLY origins for random
+    // throwable props. Each round starts with one random allowed prop per donut.
+    for (std::size_t i = 0; i < MapPropSpawnConfig::SlotCount; ++i) {
+        SpawnedMapProp& prop = m_props[i];
+        prop.type = randomMapPropType();
+        prop.position = m_config.props.points[i];
+        prop.spawnSlot = static_cast<std::uint8_t>(i);
+        prop.active = true;
+    }
+    m_propCount = MapPropSpawnConfig::SlotCount;
 }
 
 void GameWorld::reset(std::size_t playerCount, const GameWorldConfig& config) {
@@ -52,10 +77,13 @@ void GameWorld::reset(std::size_t playerCount, const GameWorldConfig& config) {
     }
 
     m_ball.reset(m_config.ballSpawn, m_config.ball);
+
     m_car = {};
     if (m_config.car.enabled) {
         scheduleNextCar();
     }
+
+    spawnMapProps();
 }
 
 void GameWorld::update(float dt, const PlayerInput* inputs, std::size_t inputCount) {
