@@ -168,7 +168,7 @@ void DebugRenderer::addCarHazard(const GameWorld& world) {
     const CarHazardState& car = world.car();
 
     if (car.phase == CarHazardPhase::Warning) {
-        // Visual warning while the real horn SFX path is being connected.
+        // Visual lane warning accompanies the horn SFX.
         const float laneY = worldToClipY(car.position.z);
         addQuad(-0.90f, laneY - 0.018f, 0.90f, laneY + 0.018f,
                 1.0f, 0.12f, 0.08f, 1.0f);
@@ -189,6 +189,33 @@ void DebugRenderer::addCarHazard(const GameWorld& world) {
     addQuad(x - halfW * 0.60f, y - halfH * 0.55f,
             x + halfW * 0.60f, y + halfH * 0.55f,
             0.30f, 0.68f, 0.90f, 1.0f);
+}
+
+void DebugRenderer::addSpawnedProps(const GameWorld& world) {
+    for (std::size_t i = 0; i < world.propCount(); ++i) {
+        const SpawnedMapProp& prop = world.prop(i);
+        if (!prop.active) continue;
+
+        const float x = worldToClipX(prop.position.x);
+        const float y = worldToClipY(prop.position.z);
+
+        switch (prop.type) {
+        case MapPropType::SmallBox:
+            addQuad(x - 0.030f, y - 0.030f, x + 0.030f, y + 0.030f,
+                    0.72f, 0.48f, 0.20f, 1.0f);
+            break;
+        case MapPropType::BigBox:
+            addQuad(x - 0.050f, y - 0.050f, x + 0.050f, y + 0.050f,
+                    0.48f, 0.28f, 0.12f, 1.0f);
+            break;
+        case MapPropType::ExplosiveBarrel:
+            addDiamond(x, y, 0.052f, 0.95f, 0.18f, 0.08f, 1.0f);
+            addDiamond(x, y, 0.026f, 1.0f, 0.72f, 0.10f, 1.0f);
+            break;
+        case MapPropType::None:
+            break;
+        }
+    }
 }
 
 void DebugRenderer::addTitleGeometry(std::uint32_t selectedItem, bool optionsOpen) {
@@ -301,6 +328,7 @@ void DebugRenderer::draw(const GameWorld& world) {
     beginGeometry();
     addMapMesh();
     addCarHazard(world);
+    addSpawnedProps(world);
 
     // Player and Ball stay as clear debug markers until their WBM meshes are
     // connected. They are drawn last so they remain readable over the map.
