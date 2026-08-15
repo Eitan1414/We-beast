@@ -27,7 +27,6 @@ struct RandomBallConfig {
     float randomImpulseMaxSeconds = 1.10f;
     float maxSpeed = 13.0f;
     float lethalRelativeSpeed = 7.0f;
-    float contactCooldownSeconds = 0.18f;
 };
 
 class RandomBall {
@@ -58,7 +57,6 @@ private:
     Vec3 m_velocity{3.5f, 2.0f, 2.7f};
     std::uint32_t m_rngState;
     float m_impulseTimer = 0.0f;
-    float m_contactCooldown = 0.0f;
 };
 
 } // namespace webeast
