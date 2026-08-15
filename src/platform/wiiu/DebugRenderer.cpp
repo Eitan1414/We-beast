@@ -11,7 +11,11 @@
 
 namespace webeast::wiiu {
 
-bool DebugRenderer::init(const char* shaderPath, const WbmMesh* mapMesh) {
+bool DebugRenderer::init(const char* shaderPath,
+                         const WbmMesh* mapMesh,
+                         const WbmMesh* smallBoxMesh,
+                         const WbmMesh* bigBoxMesh,
+                         const WbmMesh* explosiveBarrelMesh) {
     if (!shaderPath) return false;
 
     char* shaderData = WHBReadWholeFile(shaderPath, nullptr);
@@ -55,6 +59,9 @@ bool DebugRenderer::init(const char* shaderPath, const WbmMesh* mapMesh) {
     m_positions.reserve(MaxVertices * 4);
     m_colours.reserve(MaxVertices * 4);
     m_mapMesh = mapMesh;
+    m_smallBoxMesh = smallBoxMesh;
+    m_bigBoxMesh = bigBoxMesh;
+    m_explosiveBarrelMesh = explosiveBarrelMesh;
     m_ready = true;
     return true;
 }
@@ -67,6 +74,9 @@ void DebugRenderer::shutdown() {
     m_positions.clear();
     m_colours.clear();
     m_mapMesh = nullptr;
+    m_smallBoxMesh = nullptr;
+    m_bigBoxMesh = nullptr;
+    m_explosiveBarrelMesh = nullptr;
     m_ready = false;
 }
 
@@ -164,6 +174,54 @@ void DebugRenderer::addMapMesh() {
     }
 }
 
+bool DebugRenderer::addPropMesh(const WbmMesh* mesh,
+                                const Vec3& position,
+                                float worldRadius) {
+    if (!mesh || !mesh->valid() || worldRadius <= 0.0f) return false;
+
+    const WbmBounds& bounds = mesh->bounds();
+    const float centerX = (bounds.minX + bounds.maxX) * 0.5f;
+    const float centerZ = (bounds.minZ + bounds.maxZ) * 0.5f;
+    const float halfX = (bounds.maxX - bounds.minX) * 0.5f;
+    const float halfZ = (bounds.maxZ - bounds.minZ) * 0.5f;
+    const float sourceRadius = std::max(halfX, halfZ);
+    if (sourceRadius <= 0.000001f) return false;
+
+    const float scale = worldRadius / sourceRadius;
+    const auto& vertices = mesh->vertices();
+    const auto& indices = mesh->indices();
+    const std::uint32_t startVertex = m_vertexCount;
+
+    for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
+        if (m_vertexCount + 3 > MaxVertices) break;
+
+        const WbmVertex& a = vertices[indices[i]];
+        const WbmVertex& b = vertices[indices[i + 1]];
+        const WbmVertex& c = vertices[indices[i + 2]];
+
+        // Project the real 3D mesh from above. Side walls collapse to lines, so
+        // only triangles with a usable X/Z area are submitted. We accept both
+        // windings because exported GLBs do not all use the same top-face order.
+        const float ux = b.x - a.x;
+        const float uz = b.z - a.z;
+        const float vx = c.x - a.x;
+        const float vz = c.z - a.z;
+        const float projectedArea = uz * vx - ux * vz;
+        if (std::fabs(projectedArea) <= 0.0000001f) continue;
+
+        const WbmVertex* tri[3] = {&a, &b, &c};
+        for (const WbmVertex* v : tri) {
+            const float worldX = position.x + (v->x - centerX) * scale;
+            const float worldZ = position.z + (v->z - centerZ) * scale;
+            appendVertex(worldToClipX(worldX), worldToClipY(worldZ),
+                         v->r / 255.0f, v->g / 255.0f,
+                         v->b / 255.0f, v->a / 255.0f);
+        }
+    }
+
+    return m_vertexCount > startVertex;
+}
+
 void DebugRenderer::addCarHazard(const GameWorld& world) {
     const CarHazardState& car = world.car();
 
@@ -196,9 +254,25 @@ void DebugRenderer::addSpawnedProps(const GameWorld& world) {
         const SpawnedMapProp& prop = world.prop(i);
         if (!prop.active) continue;
 
+        bool renderedMesh = false;
+        switch (prop.type) {
+        case MapPropType::SmallBox:
+            renderedMesh = addPropMesh(m_smallBoxMesh, prop.position, 0.26f);
+            break;
+        case MapPropType::BigBox:
+            renderedMesh = addPropMesh(m_bigBoxMesh, prop.position, 0.42f);
+            break;
+        case MapPropType::ExplosiveBarrel:
+            renderedMesh = addPropMesh(m_explosiveBarrelMesh, prop.position, 0.32f);
+            break;
+        case MapPropType::None:
+            break;
+        }
+        if (renderedMesh) continue;
+
+        // Hardware-safe fallback if a WBM file is absent from the SD bundle.
         const float x = worldToClipX(prop.position.x);
         const float y = worldToClipY(prop.position.z);
-
         switch (prop.type) {
         case MapPropType::SmallBox:
             addQuad(x - 0.030f, y - 0.030f, x + 0.030f, y + 0.030f,
