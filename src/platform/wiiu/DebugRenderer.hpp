@@ -16,6 +16,7 @@ public:
     bool init(const char* shaderPath, const WbmMesh* mapMesh);
     void shutdown();
     void draw(const GameWorld& world);
+    void drawTitleScreen(std::uint32_t selectedItem, bool optionsOpen);
 
 private:
     static constexpr std::uint32_t MaxVertices = 32768;
@@ -32,8 +33,11 @@ private:
     void addDiamond(float cx, float cy, float radius,
                     float r, float g, float b, float a = 1.0f);
     void addMapMesh();
+    void addCarHazard(const GameWorld& world);
+    void addTitleGeometry(std::uint32_t selectedItem, bool optionsOpen);
     void uploadGeometry();
     void drawCurrentGeometry();
+    void renderGeometry(float clearR, float clearG, float clearB);
 
     float worldToClipX(float x) const;
     float worldToClipY(float z) const;
