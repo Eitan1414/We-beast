@@ -21,24 +21,103 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install complete Wii U development group
+        shell: bash
         run: |
+          set -euo pipefail
           dkp-pacman -Syu --needed --noconfirm wiiu-dev
 
-      - name: Configure Wii U build
+      - name: Convert GLB props to Wii U WBM
+        shell: bash
         run: |
-          /opt/devkitpro/portlibs/wiiu/bin/powerpc-eabi-cmake -S . -B build-wiiu -DCMAKE_BUILD_TYPE=Release
+          set -euo pipefail
+          mkdir -p build-runtime
+
+          # Big box is already tracked in the repository and is now part of
+          # every native build instead of being represented by a debug square.
+          python3 tools/glb_to_wbm.py \
+            assets/source/props/big_box.glb \
+            build-runtime/prop_big_box.wbm
+
+          convert_optional_prop() {
+            local output="$1"
+            shift
+            local source
+            for source in "$@"; do
+              if [ -f "$source" ]; then
+                python3 tools/glb_to_wbm.py "$source" "build-runtime/$output"
+                return 0
+              fi
+            done
+            echo "Optional prop source missing for $output; runtime marker fallback stays enabled."
+          }
+
+          # These aliases match the names used while the models were being
+          # created. Once either GLB is committed it is picked up automatically.
+          convert_optional_prop prop_small_box.wbm \
+            assets/source/props/throwable_box_1.glb \
+            "assets/source/props/throwable box 1.glb"
+
+          convert_optional_prop prop_explosive_barrel.wbm \
+            assets/source/props/explosive_barrel.glb \
+            "assets/source/props/explosive_baril.glb"
+
+          test -s build-runtime/prop_big_box.wbm
+          ls -lh build-runtime/*.wbm
+
+      - name: Configure Wii U build
+        shell: bash
+        run: |
+          set -euo pipefail
+          /opt/devkitpro/portlibs/wiiu/bin/powerpc-eabi-cmake \
+            -S . -B build-wiiu -DCMAKE_BUILD_TYPE=Release
 
       - name: Compile RPX
-        run: cmake --build build-wiiu --parallel 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build-wiiu --parallel 2
 
       - name: Verify RPX
+        shell: bash
         run: |
+          set -euo pipefail
           test -f build-wiiu/webeast_wiiu.rpx
           ls -lh build-wiiu/webeast_wiiu.rpx
 
-      - name: Upload Wii U build
+      - name: Prepare Wii U SD package
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_DIR=dist/wiiu/apps/webeast
+          CONTENT_DIR="$APP_DIR/content"
+          mkdir -p "$CONTENT_DIR"
+
+          cp build-wiiu/webeast_wiiu.rpx "$APP_DIR/"
+          cp assets/runtime/shaders/pos_col_shader.gsh "$CONTENT_DIR/"
+          cp build-runtime/*.wbm "$CONTENT_DIR/"
+
+          if [ -f assets/runtime/audio/car_honk.pcm ]; then
+            cp assets/runtime/audio/car_honk.pcm "$CONTENT_DIR/"
+          fi
+          if [ -f assets/runtime/map_02.wbm ]; then
+            cp assets/runtime/map_02.wbm "$CONTENT_DIR/"
+          fi
+          if [ -f assets/runtime/map_01.wbm ]; then
+            cp assets/runtime/map_01.wbm "$CONTENT_DIR/"
+          fi
+
+          find dist -type f -maxdepth 6 -print -exec ls -lh {} \;
+
+      - name: Upload Wii U RPX
         uses: actions/upload-artifact@v4
         with:
           name: webeast-wiiu-rpx
           if-no-files-found: error
           path: build-wiiu/webeast_wiiu.rpx
+
+      - name: Upload Wii U SD package
+        uses: actions/upload-artifact@v4
+        with:
+          name: webeast-wiiu-sd-package
+          if-no-files-found: error
+          path: dist/wiiu/**
