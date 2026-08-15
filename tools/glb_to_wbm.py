@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""Convert simple GLB 2.0 meshes to the We Beast WBM1 runtime format.
-
-WBM1 intentionally keeps the runtime loader tiny on Wii U:
-- indexed triangle mesh;
-- float4 positions;
-- RGBA8 vertex colours;
-- float2 UVs reserved for the textured renderer.
-
-The source GLB remains the editable/master asset. WBM is a generated runtime asset.
-"""
+"""Convert simple GLB 2.0 meshes to the We Beast WBM1 runtime format."""
 
 import argparse
 import json
@@ -77,14 +68,59 @@ def _scan_json_value(text, start):
     return i
 
 
-def _top_level_members_loose(text):
-    """Split a top-level JSON object without validating member values.
+def _strip_named_members(text, member_name):
+    """Remove every object member with this name without parsing its value.
 
-    Nomad Sculpt 1.10 can export useful, standards-compatible mesh arrays next
-    to private metadata that strict JSON parsers reject. For conversion we only
-    need a handful of standard glTF members. This scanner keeps each top-level
-    value as raw text so malformed unrelated metadata cannot block the mesh.
+    Nomad Sculpt stores large private `extras` objects both at the glTF root and
+    inside meshes/nodes. They are not needed by We Beast and some Nomad exports
+    contain non-strict JSON in those private blocks. Geometry members remain
+    byte-for-byte represented by the same JSON values and BIN chunk.
     """
+    needle = json.dumps(member_name)
+    search_from = 0
+
+    while True:
+        key_start = text.find(needle, search_from)
+        if key_start < 0:
+            return text
+
+        colon = key_start + len(needle)
+        while colon < len(text) and text[colon].isspace():
+            colon += 1
+        if colon >= len(text) or text[colon] != ":":
+            search_from = key_start + len(needle)
+            continue
+
+        value_start = colon + 1
+        while value_start < len(text) and text[value_start].isspace():
+            value_start += 1
+        try:
+            value_end = _scan_json_value(text, value_start)
+        except ValueError:
+            search_from = key_start + len(needle)
+            continue
+
+        after = value_end
+        while after < len(text) and text[after].isspace():
+            after += 1
+
+        if after < len(text) and text[after] == ",":
+            # First/middle member: consume its following comma.
+            text = text[:key_start] + text[after + 1:]
+            search_from = max(0, key_start - 1)
+            continue
+
+        before = key_start
+        while before > 0 and text[before - 1].isspace():
+            before -= 1
+        if before > 0 and text[before - 1] == ",":
+            before -= 1
+        text = text[:before] + text[value_end:]
+        search_from = max(0, before - 1)
+
+
+def _top_level_members_loose(text):
+    """Split the glTF root object without validating individual values."""
     members = {}
     i = 0
     while i < len(text) and text[i].isspace():
@@ -120,40 +156,43 @@ def _top_level_members_loose(text):
     return members
 
 
-def _minimal_gltf_from_loose_json(text, original_error):
+def _load_loose_member(raw, key, required=False):
+    if key not in raw:
+        if required:
+            raise ValueError(f"GLB is missing required glTF field {key!r}")
+        return None
+
+    value = raw[key]
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError as first_error:
+        cleaned = _strip_named_members(value, "extras")
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError as exc:
+            if required:
+                context = cleaned[max(0, exc.pos - 100):exc.pos + 100]
+                raise ValueError(
+                    f"Nomad GLB standard field {key!r} is malformed near "
+                    f"offset {exc.pos}: {context!r}"
+                ) from exc
+            return None
+
+
+def _minimal_gltf_from_loose_json(text):
     raw = _top_level_members_loose(text)
-    required = ("accessors", "bufferViews", "meshes", "nodes")
     result = {}
 
-    for key in required:
-        if key not in raw:
-            raise original_error
-        try:
-            result[key] = json.loads(raw[key])
-        except json.JSONDecodeError as exc:
-            context = raw[key][max(0, exc.pos - 80):exc.pos + 80]
-            raise ValueError(
-                f"Nomad GLB standard field {key!r} is malformed near "
-                f"offset {exc.pos}: {context!r}"
-            ) from exc
+    for key in ("accessors", "bufferViews", "meshes", "nodes"):
+        result[key] = _load_loose_member(raw, key, required=True)
 
-    # These fields are useful but have safe fallbacks in the converter.
     for key in ("scene", "scenes", "buffers", "asset"):
-        if key not in raw:
-            continue
-        try:
-            result[key] = json.loads(raw[key])
-        except json.JSONDecodeError:
-            pass
+        value = _load_loose_member(raw, key)
+        if value is not None:
+            result[key] = value
 
-    # Materials affect colour only. If Nomad's material metadata is malformed,
-    # keep the geometry and vertex colours instead of rejecting the whole mesh.
-    if "materials" in raw:
-        try:
-            result["materials"] = json.loads(raw["materials"])
-        except json.JSONDecodeError:
-            result["materials"] = []
-
+    materials = _load_loose_member(raw, "materials")
+    result["materials"] = materials if materials is not None else []
     return result
 
 
@@ -161,10 +200,15 @@ def _decode_gltf_json(chunk):
     text = chunk.rstrip(b"\0 \t\r\n").decode("utf-8")
     try:
         return json.loads(text)
-    except json.JSONDecodeError as original_error:
-        # Recover only the standard mesh fields. Private Nomad project-state
-        # metadata is deliberately ignored; binary vertex/index data is kept.
-        return _minimal_gltf_from_loose_json(text, original_error)
+    except json.JSONDecodeError:
+        # First try the simplest repair: remove all optional Nomad extras from
+        # the complete glTF JSON. If another private area is odd, fall back to
+        # extracting only the standard fields needed by the converter.
+        cleaned = _strip_named_members(text, "extras")
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            return _minimal_gltf_from_loose_json(text)
 
 
 def load_glb(path):
@@ -273,7 +317,10 @@ def transform_point(matrix, point):
 def scene_nodes(gltf):
     scene_index = gltf.get("scene", 0)
     fallback = {"nodes": list(range(len(gltf.get("nodes", []))))}
-    roots = gltf.get("scenes", [fallback])[scene_index].get("nodes", [])
+    scenes = gltf.get("scenes") or [fallback]
+    if scene_index < 0 or scene_index >= len(scenes):
+        scene_index = 0
+    roots = scenes[scene_index].get("nodes", [])
     nodes = gltf.get("nodes", [])
     result = []
 
@@ -352,14 +399,14 @@ def convert(source, destination):
 
     if not vertices:
         raise ValueError("No mesh vertices found")
+    if len(indices) < 3 or len(indices) % 3 != 0:
+        raise ValueError("Converted mesh does not contain complete triangles")
 
     xs = [v[0] for v in vertices]
     ys = [v[1] for v in vertices]
     zs = [v[2] for v in vertices]
     bounds = (min(xs), min(ys), min(zs), max(xs), max(ys), max(zs))
 
-    # Header: magic, version, vertexCount, indexCount, flags, AABB[6].
-    # Vertex: float4 position + RGBA8 + float2 UV = 28 bytes.
     output = bytearray(
         struct.pack(
             "<4sIIII6f",
