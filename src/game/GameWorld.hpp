@@ -42,6 +42,36 @@ struct CarHazardState {
     std::uint32_t passSerial = 0;
 };
 
+enum class MapPropType : std::uint8_t {
+    None,
+    SmallBox,
+    BigBox,
+    ExplosiveBarrel,
+};
+
+struct MapPropSpawnConfig {
+    static constexpr std::size_t SlotCount = 4;
+
+    bool enabled = false;
+
+    // These four positions correspond to Torus, Torus 1, Torus 2 and Torus 3
+    // in the supplied Map 2 GLB, mapped into the current +/-6.5 gameplay
+    // coordinate system. No random prop is allowed to originate elsewhere.
+    std::array<Vec3, SlotCount> points{{
+        {-2.10f, 0.20f, -3.85f},
+        {-2.10f, 0.20f,  4.37f},
+        { 2.54f, 0.20f,  4.37f},
+        { 2.54f, 0.20f, -3.02f},
+    }};
+};
+
+struct SpawnedMapProp {
+    MapPropType type = MapPropType::None;
+    Vec3 position{};
+    std::uint8_t spawnSlot = 0;
+    bool active = false;
+};
+
 struct GameWorldConfig {
     static constexpr std::size_t MaxPlayers = 4;
 
@@ -52,6 +82,7 @@ struct GameWorldConfig {
     ArenaBounds ballArena{};
     Vec3 ballSpawn{0.0f, 3.5f, 0.0f};
     CarHazardConfig car{};
+    MapPropSpawnConfig props{};
 };
 
 class GameWorld {
@@ -67,6 +98,9 @@ public:
     const RandomBall& ball() const { return m_ball; }
     const CarHazardState& car() const { return m_car; }
 
+    std::size_t propCount() const { return m_propCount; }
+    const SpawnedMapProp& prop(std::size_t index) const { return m_props[index]; }
+
     std::size_t aliveCount() const;
     int winnerId() const;
     bool roundFinished() const;
@@ -75,6 +109,8 @@ private:
     void fixedUpdate(const PlayerInput* inputs, std::size_t inputCount, float dt);
     void updateCarHazard(float dt);
     void scheduleNextCar();
+    void spawnMapProps();
+    MapPropType randomMapPropType();
     float nextRandom01();
 
     GameWorldConfig m_config{};
@@ -83,6 +119,8 @@ private:
     std::size_t m_playerCount = 0;
     RandomBall m_ball;
     CarHazardState m_car{};
+    std::array<SpawnedMapProp, MapPropSpawnConfig::SlotCount> m_props{};
+    std::size_t m_propCount = 0;
     std::uint32_t m_randomState = 0xC0A4BEEFu;
     float m_accumulator = 0.0f;
 };
