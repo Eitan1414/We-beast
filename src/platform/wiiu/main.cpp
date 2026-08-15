@@ -1,9 +1,11 @@
 #include "DebugRenderer.hpp"
+#include "assets/WbmMesh.hpp"
 #include "game/GameWorld.hpp"
 
 #include <coreinit/thread.h>
 #include <coreinit/time.h>
 #include <vpad/input.h>
+#include <whb/file.h>
 #include <whb/gfx.h>
 #include <whb/proc.h>
 #include <whb/sdcard.h>
@@ -21,26 +23,44 @@ float applyDeadzone(float v, float deadzone = 0.14f) {
     return sign * ((std::fabs(v) - deadzone) / (1.0f - deadzone));
 }
 
-bool initRenderer(webeast::wiiu::DebugRenderer& renderer, const char* sdRoot) {
-    if (!sdRoot) return false;
+bool makeContentPath(char* out, std::size_t outSize,
+                     const char* sdRoot, const char* fileName,
+                     bool fallback) {
+    if (!out || !sdRoot || !fileName) return false;
+    const int written = fallback
+        ? std::snprintf(out, outSize, "%s/wut/content/%s", sdRoot, fileName)
+        : std::snprintf(out, outSize, "%s/wiiu/apps/webeast/content/%s", sdRoot, fileName);
+    return written > 0 && static_cast<std::size_t>(written) < outSize;
+}
 
-    char shaderPath[512]{};
+bool loadMap(WbmMesh& mesh, const char* sdRoot) {
+    char path[512]{};
+    for (int fallback = 0; fallback < 2; ++fallback) {
+        if (!makeContentPath(path, sizeof(path), sdRoot, "map_01.wbm", fallback != 0)) {
+            continue;
+        }
+        std::uint32_t size = 0;
+        char* bytes = WHBReadWholeFile(path, &size);
+        if (!bytes) continue;
+        const bool ok = mesh.loadFromMemory(bytes, size);
+        WHBFreeWholeFile(bytes);
+        if (ok) return true;
+    }
+    return false;
+}
 
-    // Normal We Beast SD layout.
-    std::snprintf(shaderPath,
-                  sizeof(shaderPath),
-                  "%s/wiiu/apps/webeast/content/pos_col_shader.gsh",
-                  sdRoot);
-    if (renderer.init(shaderPath)) return true;
-
-    // Development fallback matching the layout used by the official WUT GX2
-    // sample. This makes early hardware tests easier while the app packaging
-    // is still evolving.
-    std::snprintf(shaderPath,
-                  sizeof(shaderPath),
-                  "%s/wut/content/pos_col_shader.gsh",
-                  sdRoot);
-    return renderer.init(shaderPath);
+bool initRenderer(webeast::wiiu::DebugRenderer& renderer,
+                  const WbmMesh* mapMesh,
+                  const char* sdRoot) {
+    char path[512]{};
+    for (int fallback = 0; fallback < 2; ++fallback) {
+        if (!makeContentPath(path, sizeof(path), sdRoot,
+                             "pos_col_shader.gsh", fallback != 0)) {
+            continue;
+        }
+        if (renderer.init(path, mapMesh)) return true;
+    }
+    return false;
 }
 
 } // namespace
@@ -52,19 +72,26 @@ int main(int, char**) {
         WHBProcShutdown();
         return -1;
     }
-
     if (!WHBMountSdCard()) {
         WHBGfxShutdown();
         WHBProcShutdown();
         return -2;
     }
 
-    webeast::wiiu::DebugRenderer renderer;
-    if (!initRenderer(renderer, WHBGetSdCardMountPath())) {
+    WbmMesh mapMesh;
+    if (!loadMap(mapMesh, WHBGetSdCardMountPath())) {
         WHBUnmountSdCard();
         WHBGfxShutdown();
         WHBProcShutdown();
         return -3;
+    }
+
+    webeast::wiiu::DebugRenderer renderer;
+    if (!initRenderer(renderer, &mapMesh, WHBGetSdCardMountPath())) {
+        WHBUnmountSdCard();
+        WHBGfxShutdown();
+        WHBProcShutdown();
+        return -4;
     }
 
     GameWorldConfig config{};
@@ -73,15 +100,14 @@ int main(int, char**) {
 
     while (WHBProcIsRunning()) {
         PlayerInput input{};
-
         VPADStatus status{};
         VPADReadError error = VPAD_READ_SUCCESS;
+
         if (VPADRead(VPAD_CHAN_0, &status, 1, &error) > 0 &&
             error == VPAD_READ_SUCCESS) {
             input.moveX = applyDeadzone(status.leftStick.x);
             input.moveZ = -applyDeadzone(status.leftStick.y);
             input.jumpPressed = (status.trigger & VPAD_BUTTON_A) != 0;
-
             if ((status.trigger & VPAD_BUTTON_MINUS) != 0) {
                 world.reset(1, config);
             }
@@ -89,10 +115,6 @@ int main(int, char**) {
 
         world.update(1.0f / 60.0f, &input, 1);
         renderer.draw(world);
-
-        // WHBGfxFinishRender synchronizes presentation, but the small sleep
-        // also keeps this first harness from spinning aggressively if a video
-        // mode behaves unexpectedly during development.
         OSSleepTicks(OSMillisecondsToTicks(1));
     }
 
