@@ -33,10 +33,10 @@ bool makeContentPath(char* out, std::size_t outSize,
     return written > 0 && static_cast<std::size_t>(written) < outSize;
 }
 
-bool loadMap(WbmMesh& mesh, const char* sdRoot) {
+bool loadMapFile(WbmMesh& mesh, const char* sdRoot, const char* fileName) {
     char path[512]{};
     for (int fallback = 0; fallback < 2; ++fallback) {
-        if (!makeContentPath(path, sizeof(path), sdRoot, "map_01.wbm", fallback != 0)) {
+        if (!makeContentPath(path, sizeof(path), sdRoot, fileName, fallback != 0)) {
             continue;
         }
         std::uint32_t size = 0;
@@ -47,6 +47,14 @@ bool loadMap(WbmMesh& mesh, const char* sdRoot) {
         if (ok) return true;
     }
     return false;
+}
+
+int loadPreferredMap(WbmMesh& mesh, const char* sdRoot) {
+    // Current development target is Map 2. Keep Map 1 as a hardware-safe
+    // fallback so an older SD bundle can still boot the title screen/game.
+    if (loadMapFile(mesh, sdRoot, "map_02.wbm")) return 2;
+    if (loadMapFile(mesh, sdRoot, "map_01.wbm")) return 1;
+    return 0;
 }
 
 bool initRenderer(webeast::wiiu::DebugRenderer& renderer,
@@ -79,7 +87,8 @@ int main(int, char**) {
     }
 
     WbmMesh mapMesh;
-    if (!loadMap(mapMesh, WHBGetSdCardMountPath())) {
+    const int loadedMap = loadPreferredMap(mapMesh, WHBGetSdCardMountPath());
+    if (loadedMap == 0) {
         WHBUnmountSdCard();
         WHBGfxShutdown();
         WHBProcShutdown();
@@ -95,26 +104,64 @@ int main(int, char**) {
     }
 
     GameWorldConfig config{};
+    config.car.enabled = loadedMap == 2;
+
     GameWorld world(0x57424541u);
     world.reset(1, config);
+
+    bool inGame = false;
+    bool optionsOpen = false;
+    std::uint32_t selectedItem = 0; // 0 = PLAY, 1 = OPTIONS
 
     while (WHBProcIsRunning()) {
         PlayerInput input{};
         VPADStatus status{};
         VPADReadError error = VPAD_READ_SUCCESS;
+        const bool hasInput =
+            VPADRead(VPAD_CHAN_0, &status, 1, &error) > 0 &&
+            error == VPAD_READ_SUCCESS;
 
-        if (VPADRead(VPAD_CHAN_0, &status, 1, &error) > 0 &&
-            error == VPAD_READ_SUCCESS) {
-            input.moveX = applyDeadzone(status.leftStick.x);
-            input.moveZ = -applyDeadzone(status.leftStick.y);
-            input.jumpPressed = (status.trigger & VPAD_BUTTON_A) != 0;
-            if ((status.trigger & VPAD_BUTTON_MINUS) != 0) {
-                world.reset(1, config);
+        if (hasInput) {
+            if (!inGame) {
+                if (optionsOpen) {
+                    if ((status.trigger & VPAD_BUTTON_B) != 0) {
+                        optionsOpen = false;
+                    }
+                } else {
+                    if ((status.trigger & (VPAD_BUTTON_UP | VPAD_BUTTON_DOWN)) != 0) {
+                        selectedItem = selectedItem == 0 ? 1u : 0u;
+                    }
+                    if ((status.trigger & VPAD_BUTTON_A) != 0) {
+                        if (selectedItem == 0) {
+                            world.reset(1, config);
+                            inGame = true;
+                        } else {
+                            optionsOpen = true;
+                        }
+                    }
+                }
+            } else {
+                input.moveX = applyDeadzone(status.leftStick.x);
+                input.moveZ = -applyDeadzone(status.leftStick.y);
+                input.jumpPressed = (status.trigger & VPAD_BUTTON_A) != 0;
+
+                if ((status.trigger & VPAD_BUTTON_MINUS) != 0) {
+                    world.reset(1, config);
+                }
+                if ((status.trigger & VPAD_BUTTON_PLUS) != 0) {
+                    inGame = false;
+                    optionsOpen = false;
+                }
             }
         }
 
-        world.update(1.0f / 60.0f, &input, 1);
-        renderer.draw(world);
+        if (inGame) {
+            world.update(1.0f / 60.0f, &input, 1);
+            renderer.draw(world);
+        } else {
+            renderer.drawTitleScreen(selectedItem, optionsOpen);
+        }
+
         OSSleepTicks(OSMillisecondsToTicks(1));
     }
 
