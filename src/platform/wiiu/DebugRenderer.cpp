@@ -157,7 +157,6 @@ void DebugRenderer::addMapMesh() {
         const WbmVertex& b = vertices[indices[i + 1]];
         const WbmVertex& c = vertices[indices[i + 2]];
 
-        // In the top-down prototype renderer, only upward-facing surfaces are useful.
         const float ux = b.x - a.x;
         const float uz = b.z - a.z;
         const float vx = c.x - a.x;
@@ -199,9 +198,6 @@ bool DebugRenderer::addPropMesh(const WbmMesh* mesh,
         const WbmVertex& b = vertices[indices[i + 1]];
         const WbmVertex& c = vertices[indices[i + 2]];
 
-        // Project the real 3D mesh from above. Side walls collapse to lines, so
-        // only triangles with a usable X/Z area are submitted. We accept both
-        // windings because exported GLBs do not all use the same top-face order.
         const float ux = b.x - a.x;
         const float uz = b.z - a.z;
         const float vx = c.x - a.x;
@@ -226,7 +222,6 @@ void DebugRenderer::addCarHazard(const GameWorld& world) {
     const CarHazardState& car = world.car();
 
     if (car.phase == CarHazardPhase::Warning) {
-        // Visual lane warning accompanies the horn SFX.
         const float laneY = worldToClipY(car.position.z);
         addQuad(-0.90f, laneY - 0.018f, 0.90f, laneY + 0.018f,
                 1.0f, 0.12f, 0.08f, 1.0f);
@@ -240,8 +235,6 @@ void DebugRenderer::addCarHazard(const GameWorld& world) {
     const float halfW = 0.12f;
     const float halfH = 0.065f;
 
-    // Temporary car marker. The Map 2 vehicle mesh can replace this without
-    // touching the hazard timing/collision code.
     addQuad(x - halfW, y - halfH, x + halfW, y + halfH,
             0.12f, 0.12f, 0.15f, 1.0f);
     addQuad(x - halfW * 0.60f, y - halfH * 0.55f,
@@ -270,7 +263,6 @@ void DebugRenderer::addSpawnedProps(const GameWorld& world) {
         }
         if (renderedMesh) continue;
 
-        // Hardware-safe fallback if a WBM file is absent from the SD bundle.
         const float x = worldToClipX(prop.position.x);
         const float y = worldToClipY(prop.position.z);
         switch (prop.type) {
@@ -293,11 +285,6 @@ void DebugRenderer::addSpawnedProps(const GameWorld& world) {
 }
 
 void DebugRenderer::addTitleGeometry(std::uint32_t selectedItem, bool optionsOpen) {
-    // The geometry version mirrors the colours/layout of the supplied title
-    // assets. It gives us a fully navigable title screen before the PNG->GX2
-    // texture uploader lands.
-
-    // Halftone corner from title background.
     for (int row = 0; row < 6; ++row) {
         for (int column = 0; column < 8 - row; ++column) {
             const float x = -0.96f + static_cast<float>(column) * 0.055f;
@@ -306,7 +293,6 @@ void DebugRenderer::addTitleGeometry(std::uint32_t selectedItem, bool optionsOpe
         }
     }
 
-    // Stylised WE BEAST logo block: cyan body, white highlight and dark shadow.
     addQuad(-0.52f, 0.31f, 0.52f, 0.69f, 0.00f, 0.05f, 0.06f, 1.0f);
     addQuad(-0.45f, 0.36f, 0.45f, 0.64f, 0.02f, 0.70f, 0.78f, 1.0f);
     addQuad(-0.35f, 0.43f, 0.35f, 0.57f, 0.96f, 0.98f, 0.98f, 1.0f);
@@ -314,8 +300,6 @@ void DebugRenderer::addTitleGeometry(std::uint32_t selectedItem, bool optionsOpe
     const bool playSelected = selectedItem == 0;
     const bool optionsSelected = selectedItem == 1;
 
-    // PLAY button: gold normally, blue/lilac when selected, matching the
-    // supplied Play.png and Play presed.png states.
     if (playSelected) {
         addQuad(-0.39f, -0.06f, 0.39f, 0.12f, 0.55f, 0.65f, 0.93f, 1.0f);
         addQuad(-0.35f, -0.025f, 0.35f, 0.085f, 0.68f, 0.74f, 0.98f, 1.0f);
@@ -324,7 +308,6 @@ void DebugRenderer::addTitleGeometry(std::uint32_t selectedItem, bool optionsOpe
         addQuad(-0.35f, -0.025f, 0.35f, 0.085f, 0.96f, 0.86f, 0.47f, 1.0f);
     }
 
-    // Orange centre mark stands in for the PLAY lettering until texture upload.
     addQuad(-0.16f, 0.015f, 0.16f, 0.055f, 1.0f, 0.34f, 0.08f, 1.0f);
 
     if (optionsSelected) {
@@ -337,8 +320,6 @@ void DebugRenderer::addTitleGeometry(std::uint32_t selectedItem, bool optionsOpe
     addQuad(-0.18f, -0.265f, 0.18f, -0.225f, 0.97f, 0.97f, 0.97f, 1.0f);
 
     if (optionsOpen) {
-        // Simple options overlay for now. B closes it; future settings can be
-        // inserted here without changing title navigation.
         addQuad(-0.62f, -0.62f, 0.62f, 0.62f, 0.05f, 0.05f, 0.08f, 1.0f);
         addQuad(-0.54f, 0.28f, 0.54f, 0.43f, 0.24f, 0.27f, 0.29f, 1.0f);
         addQuad(-0.54f, 0.02f, 0.54f, 0.17f, 0.24f, 0.27f, 0.29f, 1.0f);
@@ -404,23 +385,37 @@ void DebugRenderer::draw(const GameWorld& world) {
     addCarHazard(world);
     addSpawnedProps(world);
 
-    // Player and Ball stay as clear debug markers until their WBM meshes are
-    // connected. They are drawn last so they remain readable over the map.
+    // V0.1 hardware markers: blue = player, red = no-AI training Dummy,
+    // yellow = training Dummy currently grabbed. This makes grab state visible
+    // before the animated Dummy renderer is connected.
     for (std::size_t i = 0; i < world.playerCount(); ++i) {
         const PlayerState& player = world.player(i);
         const float x = worldToClipX(player.position.x);
         const float y = worldToClipY(player.position.z);
         const float size = 0.045f + std::clamp(player.position.y, 0.0f, 3.0f) * 0.006f;
+
         if (player.eliminated) {
-            addQuad(x - size, y - size, x + size, y + size, 0.18f, 0.18f, 0.18f, 1.0f);
+            addQuad(x - size, y - size, x + size, y + size,
+                    0.18f, 0.18f, 0.18f, 1.0f);
+        } else if (world.isTrainingDummy(i)) {
+            if (world.isGrabbed(i)) {
+                addQuad(x - size, y - size, x + size, y + size,
+                        1.0f, 0.72f, 0.08f, 1.0f);
+            } else {
+                addQuad(x - size, y - size, x + size, y + size,
+                        0.95f, 0.16f, 0.12f, 1.0f);
+            }
         } else {
-            addQuad(x - size, y - size, x + size, y + size, 0.15f, 0.55f, 1.0f, 1.0f);
+            addQuad(x - size, y - size, x + size, y + size,
+                    0.15f, 0.55f, 1.0f, 1.0f);
         }
     }
 
-    const Vec3& ball = world.ball().position();
-    addDiamond(worldToClipX(ball.x), worldToClipY(ball.z), 0.045f,
-               1.0f, 0.18f, 0.10f, 1.0f);
+    if (world.ballEnabled()) {
+        const Vec3& ball = world.ball().position();
+        addDiamond(worldToClipX(ball.x), worldToClipY(ball.z), 0.045f,
+                   1.0f, 0.18f, 0.10f, 1.0f);
+    }
 
     renderGeometry(0.035f, 0.040f, 0.055f);
 }
