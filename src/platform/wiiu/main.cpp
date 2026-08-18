@@ -26,33 +26,65 @@ float applyDeadzone(float v, float deadzone = 0.14f) {
 
 bool makeContentPath(char* out, std::size_t outSize,
                      const char* sdRoot, const char* fileName,
-                     bool fallback) {
-    if (!out || !sdRoot || !fileName) return false;
-    const int written = fallback
-        ? std::snprintf(out, outSize, "%s/wut/content/%s", sdRoot, fileName)
-        : std::snprintf(out, outSize, "%s/wiiu/apps/webeast/content/%s", sdRoot, fileName);
+                     int source) {
+    if (!out || !fileName) return false;
+
+    int written = -1;
+    switch (source) {
+    case 0:
+        // Aroma/WUHB content bundled with wuhbtool --content is exposed here.
+        written = std::snprintf(out, outSize, "fs:/vol/content/%s", fileName);
+        break;
+    case 1:
+        if (!sdRoot) return false;
+        written = std::snprintf(out, outSize,
+                                "%s/wiiu/apps/webeast/content/%s",
+                                sdRoot, fileName);
+        break;
+    case 2:
+        if (!sdRoot) return false;
+        written = std::snprintf(out, outSize,
+                                "%s/wut/content/%s",
+                                sdRoot, fileName);
+        break;
+    default:
+        return false;
+    }
+
     return written > 0 && static_cast<std::size_t>(written) < outSize;
 }
 
-bool loadWbmFile(WbmMesh& mesh, const char* sdRoot, const char* fileName) {
+bool readContentFile(const char* sdRoot,
+                     const char* fileName,
+                     char*& bytes,
+                     std::uint32_t& size) {
+    bytes = nullptr;
+    size = 0;
+
     char path[512]{};
-    for (int fallback = 0; fallback < 2; ++fallback) {
-        if (!makeContentPath(path, sizeof(path), sdRoot, fileName, fallback != 0)) {
+    for (int source = 0; source < 3; ++source) {
+        if (!makeContentPath(path, sizeof(path), sdRoot, fileName, source)) {
             continue;
         }
-        std::uint32_t size = 0;
-        char* bytes = WHBReadWholeFile(path, &size);
-        if (!bytes) continue;
-        const bool ok = mesh.loadFromMemory(bytes, size);
-        WHBFreeWholeFile(bytes);
-        if (ok) return true;
+        bytes = WHBReadWholeFile(path, &size);
+        if (bytes) return true;
     }
     return false;
 }
 
+bool loadWbmFile(WbmMesh& mesh, const char* sdRoot, const char* fileName) {
+    char* bytes = nullptr;
+    std::uint32_t size = 0;
+    if (!readContentFile(sdRoot, fileName, bytes, size)) return false;
+
+    const bool ok = mesh.loadFromMemory(bytes, size);
+    WHBFreeWholeFile(bytes);
+    return ok;
+}
+
 int loadPreferredMap(WbmMesh& mesh, const char* sdRoot) {
-    // V0.1 solo combat intentionally boots Map 1 first. Map 2 is retained only
-    // as a fallback so an older SD setup can still display a real map.
+    // V0.1 solo combat intentionally boots Map 1 first. A user's existing
+    // map_01.wbm on SD is still picked up after checking WUHB bundled content.
     if (loadWbmFile(mesh, sdRoot, "map_01.wbm")) return 1;
     if (loadWbmFile(mesh, sdRoot, "map_02.wbm")) return 2;
     return 0;
@@ -74,9 +106,9 @@ bool initRenderer(webeast::wiiu::DebugRenderer& renderer,
                   const WbmMesh* explosiveBarrelMesh,
                   const char* sdRoot) {
     char path[512]{};
-    for (int fallback = 0; fallback < 2; ++fallback) {
+    for (int source = 0; source < 3; ++source) {
         if (!makeContentPath(path, sizeof(path), sdRoot,
-                             "pos_col_shader.gsh", fallback != 0)) {
+                             "pos_col_shader.gsh", source)) {
             continue;
         }
         if (renderer.init(path, mapMesh,
@@ -89,9 +121,9 @@ bool initRenderer(webeast::wiiu::DebugRenderer& renderer,
 
 bool initHorn(webeast::wiiu::HornPlayer& horn, const char* sdRoot) {
     char path[512]{};
-    for (int fallback = 0; fallback < 2; ++fallback) {
+    for (int source = 0; source < 3; ++source) {
         if (!makeContentPath(path, sizeof(path), sdRoot,
-                             "car_honk.pcm", fallback != 0)) {
+                             "car_honk.pcm", source)) {
             continue;
         }
         if (horn.init(path, 16000)) return true;
@@ -108,19 +140,17 @@ int main(int, char**) {
         WHBProcShutdown();
         return -1;
     }
-    if (!WHBMountSdCard()) {
-        WHBGfxShutdown();
-        WHBProcShutdown();
-        return -2;
-    }
 
-    const char* sdRoot = WHBGetSdCardMountPath();
+    // WUHB content does not depend on mounting the raw SD card. Keep the mount
+    // optional so Aroma can still boot the built-in combat/baseplate test even
+    // if external SD access is unavailable for any reason.
+    const bool sdMounted = WHBMountSdCard();
+    const char* sdRoot = sdMounted ? WHBGetSdCardMountPath() : nullptr;
 
     WbmMesh mapMesh;
     const int loadedMap = loadPreferredMap(mapMesh, sdRoot);
     // If no WBM map is present, DebugRenderer deliberately draws its built-in
-    // baseplate fallback. This keeps the combat test bootable from a fresh CI
-    // package; copying the existing map_01.wbm onto the SD restores real Map 1.
+    // baseplate fallback. This keeps the V0.1 test self-contained.
 
     WbmMesh smallBoxMesh;
     WbmMesh bigBoxMesh;
@@ -136,7 +166,7 @@ int main(int, char**) {
                       &bigBoxMesh,
                       &explosiveBarrelMesh,
                       sdRoot)) {
-        WHBUnmountSdCard();
+        if (sdMounted) WHBUnmountSdCard();
         WHBGfxShutdown();
         WHBProcShutdown();
         return -4;
@@ -147,9 +177,8 @@ int main(int, char**) {
 
     GameWorldConfig config{};
 
-    // V0.1 scope: Map 1 + one controllable Dummy + one stationary/no-AI
-    // training Dummy. Ball, car and Map 2 props are intentionally disabled so
-    // the hardware test is only about punch/grab/throw/falling.
+    // V0.1 scope: Map 1/baseplate + one controllable Dummy + one stationary
+    // training Dummy. Ball, car and Map 2 props are disabled.
     config.ballEnabled = false;
     config.car.enabled = false;
     config.props.enabled = false;
@@ -197,10 +226,6 @@ int main(int, char**) {
                 input.moveX = applyDeadzone(status.leftStick.x);
                 input.moveZ = -applyDeadzone(status.leftStick.y);
                 input.jumpPressed = (status.trigger & VPAD_BUTTON_A) != 0;
-
-                // V0.1 combat controls:
-                // Y  = punch
-                // ZR = hold to grab; releasing ZR throws the grabbed Dummy.
                 input.punchPressed = (status.trigger & VPAD_BUTTON_Y) != 0;
                 input.grabHeld = ((status.hold | status.trigger) & VPAD_BUTTON_ZR) != 0;
 
@@ -216,8 +241,6 @@ int main(int, char**) {
         }
 
         if (inGame) {
-            // Only player 0 receives input. Player 1 is the stationary training
-            // Dummy and is still simulated physically when hit/thrown.
             world.update(1.0f / 60.0f, &input, 1);
 
             const std::uint32_t warningSerial = world.car().warningSerial;
@@ -236,7 +259,7 @@ int main(int, char**) {
 
     horn.shutdown();
     renderer.shutdown();
-    WHBUnmountSdCard();
+    if (sdMounted) WHBUnmountSdCard();
     WHBGfxShutdown();
     WHBProcShutdown();
     return 0;
