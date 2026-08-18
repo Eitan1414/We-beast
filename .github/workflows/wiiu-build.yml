@@ -60,6 +60,19 @@ jobs:
           test -s build-runtime/prop_big_box.wbm
           ls -lh build-runtime/*.wbm
 
+      - name: Fetch known-good WUT GX2 shader
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHADER_URL="https://raw.githubusercontent.com/devkitPro/wut/47ae4139085fa2224655b63fa6c9916eeda716d3/samples/cmake/content/pos_col_shader.gsh"
+          curl -fL "$SHADER_URL" -o build-runtime/pos_col_shader.gsh
+
+          # Pin both Git blob identity and expected size so a changed/corrupt
+          # binary can never silently enter the Aroma package.
+          test "$(git hash-object build-runtime/pos_col_shader.gsh)" = "e1c4694b3c0e61fdd9b43842f5253339ed5cfafa"
+          test "$(stat -c %s build-runtime/pos_col_shader.gsh)" = "1386"
+          ls -lh build-runtime/pos_col_shader.gsh
+
       - name: Configure Wii U build
         shell: bash
         run: |
@@ -87,10 +100,9 @@ jobs:
           EMBED_DIR=build-wuhb-content
           mkdir -p "$EMBED_DIR"
 
-          # The renderer needs this before it can draw even the title screen.
-          cp assets/runtime/shaders/pos_col_shader.gsh "$EMBED_DIR/"
+          # Use the exact shader from devkitPro/WUT's working gx2_triangle sample.
+          cp build-runtime/pos_col_shader.gsh "$EMBED_DIR/"
 
-          # Include any runtime assets already available in the repository/build.
           cp build-runtime/*.wbm "$EMBED_DIR/" || true
           if [ -f assets/runtime/audio/car_honk.pcm ]; then
             cp assets/runtime/audio/car_honk.pcm "$EMBED_DIR/"
@@ -103,6 +115,7 @@ jobs:
           fi
 
           test -s "$EMBED_DIR/pos_col_shader.gsh"
+          test "$(stat -c %s "$EMBED_DIR/pos_col_shader.gsh")" = "1386"
           find "$EMBED_DIR" -maxdepth 1 -type f -print -exec ls -lh {} \;
 
       - name: Package Aroma WUHB
@@ -131,10 +144,8 @@ jobs:
 
           cp build-wiiu/WeBeast-V0.1.wuhb "$APPS_DIR/"
 
-          # Keep the external content folder too, for compatibility and for a
-          # user's existing map_01.wbm. The WUHB itself is now self-contained
-          # enough to reach the title screen without this directory.
-          cp assets/runtime/shaders/pos_col_shader.gsh "$CONTENT_DIR/"
+          # Keep the same known-good shader in the external compatibility path.
+          cp build-runtime/pos_col_shader.gsh "$CONTENT_DIR/"
           cp build-runtime/*.wbm "$CONTENT_DIR/" || true
 
           if [ -f assets/runtime/audio/car_honk.pcm ]; then
