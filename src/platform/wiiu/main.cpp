@@ -1,5 +1,4 @@
 #include "DebugRenderer.hpp"
-#include "HornPlayer.hpp"
 #include "assets/WbmMesh.hpp"
 #include "game/GameWorld.hpp"
 
@@ -24,6 +23,21 @@ float applyDeadzone(float v, float deadzone = 0.14f) {
     return sign * ((std::fabs(v) - deadzone) / (1.0f - deadzone));
 }
 
+void showBootStage(float r, float g, float b, std::uint32_t milliseconds) {
+    WHBGfxBeginRender();
+
+    WHBGfxBeginRenderTV();
+    WHBGfxClearColor(r, g, b, 1.0f);
+    WHBGfxFinishRenderTV();
+
+    WHBGfxBeginRenderDRC();
+    WHBGfxClearColor(r, g, b, 1.0f);
+    WHBGfxFinishRenderDRC();
+
+    WHBGfxFinishRender();
+    OSSleepTicks(OSMillisecondsToTicks(milliseconds));
+}
+
 bool makeContentPath(char* out, std::size_t outSize,
                      const char* sdRoot, const char* fileName,
                      int source) {
@@ -32,8 +46,9 @@ bool makeContentPath(char* out, std::size_t outSize,
     int written = -1;
     switch (source) {
     case 0:
-        // Aroma/WUHB content bundled with wuhbtool --content is exposed here.
-        written = std::snprintf(out, outSize, "fs:/vol/content/%s", fileName);
+        // WHBReadWholeFile accepts an absolute Cafe OS path directly.
+        // WUHB --content is mounted by Aroma as /vol/content/.
+        written = std::snprintf(out, outSize, "/vol/content/%s", fileName);
         break;
     case 1:
         if (!sdRoot) return false;
@@ -83,8 +98,6 @@ bool loadWbmFile(WbmMesh& mesh, const char* sdRoot, const char* fileName) {
 }
 
 int loadPreferredMap(WbmMesh& mesh, const char* sdRoot) {
-    // V0.1 solo combat intentionally boots Map 1 first. A user's existing
-    // map_01.wbm on SD is still picked up after checking WUHB bundled content.
     if (loadWbmFile(mesh, sdRoot, "map_01.wbm")) return 1;
     if (loadWbmFile(mesh, sdRoot, "map_02.wbm")) return 2;
     return 0;
@@ -119,18 +132,6 @@ bool initRenderer(webeast::wiiu::DebugRenderer& renderer,
     return false;
 }
 
-bool initHorn(webeast::wiiu::HornPlayer& horn, const char* sdRoot) {
-    char path[512]{};
-    for (int source = 0; source < 3; ++source) {
-        if (!makeContentPath(path, sizeof(path), sdRoot,
-                             "car_honk.pcm", source)) {
-            continue;
-        }
-        if (horn.init(path, 16000)) return true;
-    }
-    return false;
-}
-
 } // namespace
 
 int main(int, char**) {
@@ -141,16 +142,17 @@ int main(int, char**) {
         return -1;
     }
 
-    // WUHB content does not depend on mounting the raw SD card. Keep the mount
-    // optional so Aroma can still boot the built-in combat/baseplate test even
-    // if external SD access is unavailable for any reason.
+    // RED = ProcUI/GX2 got far enough to render a framebuffer.
+    showBootStage(0.82f, 0.05f, 0.05f, 450);
+
     const bool sdMounted = WHBMountSdCard();
     const char* sdRoot = sdMounted ? WHBGetSdCardMountPath() : nullptr;
 
+    // CYAN = SD mount attempt returned; WUHB can continue even if it failed.
+    showBootStage(0.04f, 0.58f, 0.72f, 450);
+
     WbmMesh mapMesh;
     const int loadedMap = loadPreferredMap(mapMesh, sdRoot);
-    // If no WBM map is present, DebugRenderer deliberately draws its built-in
-    // baseplate fallback. This keeps the V0.1 test self-contained.
 
     WbmMesh smallBoxMesh;
     WbmMesh bigBoxMesh;
@@ -159,6 +161,9 @@ int main(int, char**) {
         loadMap2PropMeshes(smallBoxMesh, bigBoxMesh, explosiveBarrelMesh, sdRoot);
     }
 
+    // YELLOW = content/map probing completed; renderer/shader comes next.
+    showBootStage(0.92f, 0.72f, 0.05f, 450);
+
     webeast::wiiu::DebugRenderer renderer;
     if (!initRenderer(renderer,
                       &mapMesh,
@@ -166,19 +171,21 @@ int main(int, char**) {
                       &bigBoxMesh,
                       &explosiveBarrelMesh,
                       sdRoot)) {
+        // MAGENTA = shader or renderer initialization failed.
+        // Hold this colour long enough to be unmistakable on real hardware.
+        for (int i = 0; i < 20 && WHBProcIsRunning(); ++i) {
+            showBootStage(0.90f, 0.02f, 0.72f, 250);
+        }
         if (sdMounted) WHBUnmountSdCard();
         WHBGfxShutdown();
         WHBProcShutdown();
         return -4;
     }
 
-    webeast::wiiu::HornPlayer horn;
-    initHorn(horn, sdRoot);
+    // GREEN = shader + GX2 buffers initialized successfully.
+    showBootStage(0.04f, 0.72f, 0.18f, 650);
 
     GameWorldConfig config{};
-
-    // V0.1 scope: Map 1/baseplate + one controllable Dummy + one stationary
-    // training Dummy. Ball, car and Map 2 props are disabled.
     config.ballEnabled = false;
     config.car.enabled = false;
     config.props.enabled = false;
@@ -191,8 +198,7 @@ int main(int, char**) {
 
     bool inGame = false;
     bool optionsOpen = false;
-    std::uint32_t selectedItem = 0; // 0 = PLAY, 1 = OPTIONS
-    std::uint32_t lastCarWarningSerial = world.car().warningSerial;
+    std::uint32_t selectedItem = 0;
 
     while (WHBProcIsRunning()) {
         PlayerInput input{};
@@ -215,7 +221,6 @@ int main(int, char**) {
                     if ((status.trigger & VPAD_BUTTON_A) != 0) {
                         if (selectedItem == 0) {
                             world.reset(2, config);
-                            lastCarWarningSerial = world.car().warningSerial;
                             inGame = true;
                         } else {
                             optionsOpen = true;
@@ -231,7 +236,6 @@ int main(int, char**) {
 
                 if ((status.trigger & VPAD_BUTTON_MINUS) != 0) {
                     world.reset(2, config);
-                    lastCarWarningSerial = world.car().warningSerial;
                 }
                 if ((status.trigger & VPAD_BUTTON_PLUS) != 0) {
                     inGame = false;
@@ -242,13 +246,6 @@ int main(int, char**) {
 
         if (inGame) {
             world.update(1.0f / 60.0f, &input, 1);
-
-            const std::uint32_t warningSerial = world.car().warningSerial;
-            if (warningSerial != lastCarWarningSerial) {
-                lastCarWarningSerial = warningSerial;
-                if (warningSerial != 0) horn.play();
-            }
-
             renderer.draw(world);
         } else {
             renderer.drawTitleScreen(selectedItem, optionsOpen);
@@ -257,7 +254,6 @@ int main(int, char**) {
         OSSleepTicks(OSMillisecondsToTicks(1));
     }
 
-    horn.shutdown();
     renderer.shutdown();
     if (sdMounted) WHBUnmountSdCard();
     WHBGfxShutdown();
