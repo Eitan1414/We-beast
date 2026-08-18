@@ -51,10 +51,10 @@ bool loadWbmFile(WbmMesh& mesh, const char* sdRoot, const char* fileName) {
 }
 
 int loadPreferredMap(WbmMesh& mesh, const char* sdRoot) {
-    // Current development target is Map 2. Keep Map 1 as a hardware-safe
-    // fallback so an older SD bundle can still boot the title screen/game.
-    if (loadWbmFile(mesh, sdRoot, "map_02.wbm")) return 2;
+    // V0.1 solo combat intentionally boots Map 1 first. Map 2 is retained only
+    // as a fallback so an incomplete SD card still boots instead of crashing.
     if (loadWbmFile(mesh, sdRoot, "map_01.wbm")) return 1;
+    if (loadWbmFile(mesh, sdRoot, "map_02.wbm")) return 2;
     return 0;
 }
 
@@ -62,8 +62,6 @@ void loadMap2PropMeshes(WbmMesh& smallBox,
                         WbmMesh& bigBox,
                         WbmMesh& explosiveBarrel,
                         const char* sdRoot) {
-    // Props are optional. If one is missing the renderer keeps its old marker,
-    // so a partial asset bundle can still be tested on real hardware.
     loadWbmFile(smallBox, sdRoot, "prop_small_box.wbm");
     loadWbmFile(bigBox, sdRoot, "prop_big_box.wbm");
     loadWbmFile(explosiveBarrel, sdRoot, "prop_explosive_barrel.wbm");
@@ -96,8 +94,6 @@ bool initHorn(webeast::wiiu::HornPlayer& horn, const char* sdRoot) {
                              "car_honk.pcm", fallback != 0)) {
             continue;
         }
-        // The supplied MP3 is trimmed from 00:01 and preconverted offline to
-        // 16 kHz mono signed 16-bit big-endian PCM for a tiny Wii U runtime path.
         if (horn.init(path, 16000)) return true;
     }
     return false;
@@ -149,17 +145,25 @@ int main(int, char**) {
         return -4;
     }
 
-    // Audio is optional at boot: a missing horn asset must not prevent a
-    // graphics/gameplay hardware test from running.
+    // Kept initialized for compatibility with the existing runtime, although
+    // V0.1 solo combat disables Map 2 hazards entirely.
     webeast::wiiu::HornPlayer horn;
     initHorn(horn, sdRoot);
 
     GameWorldConfig config{};
-    config.car.enabled = loadedMap == 2;
-    config.props.enabled = loadedMap == 2;
+
+    // V0.1 scope: Map 1 + one controllable Dummy + one stationary/no-AI
+    // training Dummy. Ball, car and Map 2 props are intentionally disabled so
+    // the hardware test is only about punch/grab/throw/falling.
+    config.ballEnabled = false;
+    config.car.enabled = false;
+    config.props.enabled = false;
+    config.combat.enabled = true;
+    config.trainingDummy.enabled = true;
+    config.trainingDummy.index = 1;
 
     GameWorld world(0x57424541u);
-    world.reset(1, config);
+    world.reset(2, config);
 
     bool inGame = false;
     bool optionsOpen = false;
@@ -186,7 +190,7 @@ int main(int, char**) {
                     }
                     if ((status.trigger & VPAD_BUTTON_A) != 0) {
                         if (selectedItem == 0) {
-                            world.reset(1, config);
+                            world.reset(2, config);
                             lastCarWarningSerial = world.car().warningSerial;
                             inGame = true;
                         } else {
@@ -199,8 +203,14 @@ int main(int, char**) {
                 input.moveZ = -applyDeadzone(status.leftStick.y);
                 input.jumpPressed = (status.trigger & VPAD_BUTTON_A) != 0;
 
+                // V0.1 combat controls:
+                // Y  = punch
+                // ZR = hold to grab; releasing ZR throws the grabbed Dummy.
+                input.punchPressed = (status.trigger & VPAD_BUTTON_Y) != 0;
+                input.grabHeld = ((status.hold | status.trigger) & VPAD_BUTTON_ZR) != 0;
+
                 if ((status.trigger & VPAD_BUTTON_MINUS) != 0) {
-                    world.reset(1, config);
+                    world.reset(2, config);
                     lastCarWarningSerial = world.car().warningSerial;
                 }
                 if ((status.trigger & VPAD_BUTTON_PLUS) != 0) {
@@ -211,6 +221,8 @@ int main(int, char**) {
         }
 
         if (inGame) {
+            // Only player 0 receives input. Player 1 is the stationary training
+            // Dummy and is still simulated physically when hit/thrown.
             world.update(1.0f / 60.0f, &input, 1);
 
             const std::uint32_t warningSerial = world.car().warningSerial;
