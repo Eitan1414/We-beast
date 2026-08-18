@@ -10,8 +10,6 @@ GameWorld::GameWorld(std::uint32_t randomSeed)
       m_randomState((randomSeed ^ 0xC0A4BEEFu) ? (randomSeed ^ 0xC0A4BEEFu) : 1u) {}
 
 float GameWorld::nextRandom01() {
-    // Small deterministic xorshift RNG. It keeps the car/prop sequence
-    // reproducible for hardware tests while remaining independent of RandomBall.
     m_randomState ^= m_randomState << 13;
     m_randomState ^= m_randomState >> 17;
     m_randomState ^= m_randomState << 5;
@@ -42,8 +40,6 @@ void GameWorld::spawnMapProps() {
 
     if (!m_config.props.enabled) return;
 
-    // Map 2 rule: the four donut markers are the ONLY origins for random
-    // throwable props. Each round starts with one random allowed prop per donut.
     for (std::size_t i = 0; i < MapPropSpawnConfig::SlotCount; ++i) {
         SpawnedMapProp& prop = m_props[i];
         prop.type = randomMapPropType();
@@ -57,7 +53,12 @@ void GameWorld::spawnMapProps() {
 void GameWorld::reset(std::size_t playerCount, const GameWorldConfig& config) {
     m_config = config;
     m_playerCount = std::min(playerCount, GameWorldConfig::MaxPlayers);
+    if (m_config.trainingDummy.enabled) {
+        const std::size_t required = static_cast<std::size_t>(m_config.trainingDummy.index) + 1;
+        m_playerCount = std::min(std::max(m_playerCount, required), GameWorldConfig::MaxPlayers);
+    }
     m_accumulator = 0.0f;
+    m_trainingRespawnTimer = -1.0f;
 
     static constexpr Vec3 SpawnPoints[GameWorldConfig::MaxPlayers] = {
         {-2.2f, 0.0f, -2.2f},
@@ -74,6 +75,20 @@ void GameWorld::reset(std::size_t playerCount, const GameWorldConfig& config) {
         m_players[i].position = SpawnPoints[i];
         m_playerRuntime[i] = {};
         m_playerRuntime[i].grounded = i < m_playerCount;
+        m_grabbedTarget[i] = -1;
+        m_grabbedBy[i] = -1;
+        m_punchCooldown[i] = 0.0f;
+    }
+
+    if (m_config.trainingDummy.enabled && m_playerCount > 0) {
+        m_players[0].position = m_config.trainingDummy.playerSpawn;
+        m_playerRuntime[0].facing = {1.0f, 0.0f, 0.0f};
+
+        const std::size_t dummyIndex = m_config.trainingDummy.index;
+        if (dummyIndex < m_playerCount) {
+            m_players[dummyIndex].position = m_config.trainingDummy.dummySpawn;
+            m_playerRuntime[dummyIndex].facing = {-1.0f, 0.0f, 0.0f};
+        }
     }
 
     m_ball.reset(m_config.ballSpawn, m_config.ball);
@@ -92,8 +107,6 @@ void GameWorld::update(float dt, const PlayerInput* inputs, std::size_t inputCou
     dt = std::min(dt, m_config.maxFrameDt);
     m_accumulator += dt;
 
-    // Cap the amount of catch-up work. The game should slow for a bad frame,
-    // not run a huge physics burst that destabilizes ragdolls later.
     const float maxAccumulator = m_config.fixedStep * 5.0f;
     m_accumulator = std::min(m_accumulator, maxAccumulator);
 
@@ -105,13 +118,245 @@ void GameWorld::update(float dt, const PlayerInput* inputs, std::size_t inputCou
 
 void GameWorld::fixedUpdate(const PlayerInput* inputs, std::size_t inputCount, float dt) {
     for (std::size_t i = 0; i < m_playerCount; ++i) {
+        // A carried target is positioned directly by the grab system; running
+        // normal gravity/controller integration on it would fight the holder.
+        if (m_grabbedBy[i] >= 0) continue;
+
         static const PlayerInput EmptyInput{};
         const PlayerInput& input = (inputs && i < inputCount) ? inputs[i] : EmptyInput;
         PlayerController::update(m_players[i], m_playerRuntime[i], input, dt, m_config.player);
     }
 
-    m_ball.update(dt, m_config.ballArena, m_players.data(), m_playerCount);
+    updateCombat(inputs, inputCount, dt);
+
+    if (m_config.ballEnabled) {
+        m_ball.update(dt, m_config.ballArena, m_players.data(), m_playerCount);
+    }
     updateCarHazard(dt);
+    updateTrainingDummy(dt);
+}
+
+int GameWorld::findCombatTarget(std::size_t attackerIndex,
+                                float range,
+                                float minFacingDot) const {
+    if (attackerIndex >= m_playerCount || m_players[attackerIndex].eliminated) return -1;
+
+    const PlayerState& attacker = m_players[attackerIndex];
+    const Vec3& facing = m_playerRuntime[attackerIndex].facing;
+    int bestTarget = -1;
+    float bestDistanceSq = range * range;
+
+    for (std::size_t i = 0; i < m_playerCount; ++i) {
+        if (i == attackerIndex) continue;
+        const PlayerState& candidate = m_players[i];
+        if (candidate.eliminated || m_grabbedBy[i] >= 0) continue;
+
+        const float dx = candidate.position.x - attacker.position.x;
+        const float dz = candidate.position.z - attacker.position.z;
+        const float dy = std::fabs(candidate.position.y - attacker.position.y);
+        if (dy > 1.35f) continue;
+
+        const float distanceSq = dx * dx + dz * dz;
+        if (distanceSq > bestDistanceSq || distanceSq < 0.000001f) continue;
+
+        const float distance = std::sqrt(distanceSq);
+        const float facingDot = (dx * facing.x + dz * facing.z) / distance;
+        if (facingDot < minFacingDot) continue;
+
+        bestTarget = static_cast<int>(i);
+        bestDistanceSq = distanceSq;
+    }
+
+    return bestTarget;
+}
+
+void GameWorld::applyPunch(std::size_t attackerIndex) {
+    if (!m_config.combat.enabled || attackerIndex >= m_playerCount) return;
+    if (m_punchCooldown[attackerIndex] > 0.0f || m_grabbedTarget[attackerIndex] >= 0) return;
+
+    m_punchCooldown[attackerIndex] = m_config.combat.punchCooldownSeconds;
+
+    const int targetIndex = findCombatTarget(attackerIndex,
+                                             m_config.combat.punchRange,
+                                             m_config.combat.punchMinFacingDot);
+    if (targetIndex < 0) return;
+
+    const Vec3& facing = m_playerRuntime[attackerIndex].facing;
+    PlayerState& target = m_players[static_cast<std::size_t>(targetIndex)];
+
+    target.velocity.x += facing.x * m_config.combat.punchHorizontalImpulse;
+    target.velocity.z += facing.z * m_config.combat.punchHorizontalImpulse;
+    target.velocity.y = std::max(target.velocity.y, m_config.combat.punchVerticalImpulse);
+    target.position.y += 0.035f;
+    m_playerRuntime[static_cast<std::size_t>(targetIndex)].grounded = false;
+}
+
+void GameWorld::beginGrab(std::size_t attackerIndex) {
+    if (!m_config.combat.enabled || attackerIndex >= m_playerCount) return;
+    if (m_grabbedTarget[attackerIndex] >= 0 || m_players[attackerIndex].eliminated) return;
+
+    const int targetIndex = findCombatTarget(attackerIndex,
+                                             m_config.combat.grabRange,
+                                             m_config.combat.grabMinFacingDot);
+    if (targetIndex < 0) return;
+
+    const std::size_t target = static_cast<std::size_t>(targetIndex);
+    m_grabbedTarget[attackerIndex] = targetIndex;
+    m_grabbedBy[target] = static_cast<int>(attackerIndex);
+    m_players[target].velocity = {};
+    m_playerRuntime[target].grounded = false;
+}
+
+void GameWorld::releaseGrab(std::size_t attackerIndex, bool throwTarget) {
+    if (attackerIndex >= m_playerCount) return;
+
+    const int targetIndex = m_grabbedTarget[attackerIndex];
+    if (targetIndex < 0 || static_cast<std::size_t>(targetIndex) >= m_playerCount) {
+        m_grabbedTarget[attackerIndex] = -1;
+        return;
+    }
+
+    const std::size_t target = static_cast<std::size_t>(targetIndex);
+    m_grabbedTarget[attackerIndex] = -1;
+    m_grabbedBy[target] = -1;
+
+    if (!throwTarget || m_players[target].eliminated) return;
+
+    const PlayerState& attacker = m_players[attackerIndex];
+    const Vec3& facing = m_playerRuntime[attackerIndex].facing;
+    PlayerState& victim = m_players[target];
+
+    victim.velocity.x = facing.x * m_config.combat.throwHorizontalSpeed +
+                        attacker.velocity.x * m_config.combat.inheritedVelocityFactor;
+    victim.velocity.z = facing.z * m_config.combat.throwHorizontalSpeed +
+                        attacker.velocity.z * m_config.combat.inheritedVelocityFactor;
+    victim.velocity.y = std::max(victim.velocity.y, m_config.combat.throwVerticalSpeed);
+    victim.position.x += facing.x * 0.08f;
+    victim.position.z += facing.z * 0.08f;
+    victim.position.y += 0.04f;
+    m_playerRuntime[target].grounded = false;
+}
+
+void GameWorld::updateHeldTargets() {
+    for (std::size_t attackerIndex = 0; attackerIndex < m_playerCount; ++attackerIndex) {
+        const int targetIndex = m_grabbedTarget[attackerIndex];
+        if (targetIndex < 0) continue;
+
+        if (m_players[attackerIndex].eliminated ||
+            static_cast<std::size_t>(targetIndex) >= m_playerCount ||
+            m_players[static_cast<std::size_t>(targetIndex)].eliminated) {
+            releaseGrab(attackerIndex, false);
+            continue;
+        }
+
+        const Vec3& facing = m_playerRuntime[attackerIndex].facing;
+        const PlayerState& attacker = m_players[attackerIndex];
+        PlayerState& target = m_players[static_cast<std::size_t>(targetIndex)];
+
+        target.position = {
+            attacker.position.x + facing.x * m_config.combat.holdDistance,
+            attacker.position.y + m_config.combat.holdHeight,
+            attacker.position.z + facing.z * m_config.combat.holdDistance,
+        };
+        target.velocity = attacker.velocity;
+    }
+}
+
+void GameWorld::updateCombat(const PlayerInput* inputs, std::size_t inputCount, float dt) {
+    for (std::size_t i = 0; i < m_playerCount; ++i) {
+        m_punchCooldown[i] = std::max(0.0f, m_punchCooldown[i] - dt);
+
+        if (m_players[i].eliminated && m_grabbedTarget[i] >= 0) {
+            releaseGrab(i, false);
+        }
+    }
+
+    if (!m_config.combat.enabled || !inputs) {
+        updateHeldTargets();
+        return;
+    }
+
+    const std::size_t combatPlayerCount = std::min(inputCount, m_playerCount);
+    for (std::size_t i = 0; i < combatPlayerCount; ++i) {
+        if (m_players[i].eliminated) continue;
+        const PlayerInput& input = inputs[i];
+
+        if (input.grabHeld) {
+            if (m_grabbedTarget[i] < 0) beginGrab(i);
+        } else if (m_grabbedTarget[i] >= 0) {
+            // Releasing the grab button is the throw action in V0.1.
+            releaseGrab(i, true);
+        }
+
+        if (input.punchPressed) {
+            applyPunch(i);
+        }
+    }
+
+    updateHeldTargets();
+}
+
+void GameWorld::respawnTrainingDummy() {
+    if (!m_config.trainingDummy.enabled) return;
+    const std::size_t dummyIndex = m_config.trainingDummy.index;
+    if (dummyIndex >= m_playerCount) return;
+
+    if (m_grabbedBy[dummyIndex] >= 0) {
+        releaseGrab(static_cast<std::size_t>(m_grabbedBy[dummyIndex]), false);
+    }
+    if (m_grabbedTarget[dummyIndex] >= 0) {
+        releaseGrab(dummyIndex, false);
+    }
+
+    PlayerState& dummy = m_players[dummyIndex];
+    dummy = {};
+    dummy.id = static_cast<std::uint8_t>(dummyIndex);
+    dummy.collisionRadius = 0.48f;
+    dummy.position = m_config.trainingDummy.dummySpawn;
+    dummy.eliminated = false;
+
+    m_playerRuntime[dummyIndex] = {};
+    m_playerRuntime[dummyIndex].grounded = true;
+    m_playerRuntime[dummyIndex].facing = {-1.0f, 0.0f, 0.0f};
+    m_grabbedBy[dummyIndex] = -1;
+    m_grabbedTarget[dummyIndex] = -1;
+    m_punchCooldown[dummyIndex] = 0.0f;
+    m_trainingRespawnTimer = -1.0f;
+}
+
+void GameWorld::updateTrainingDummy(float dt) {
+    if (!m_config.trainingDummy.enabled) return;
+    const std::size_t dummyIndex = m_config.trainingDummy.index;
+    if (dummyIndex >= m_playerCount) return;
+
+    if (!m_players[dummyIndex].eliminated) {
+        m_trainingRespawnTimer = -1.0f;
+        return;
+    }
+
+    if (m_trainingRespawnTimer < 0.0f) {
+        m_trainingRespawnTimer = std::max(0.0f, m_config.trainingDummy.respawnDelaySeconds);
+        return;
+    }
+
+    m_trainingRespawnTimer -= dt;
+    if (m_trainingRespawnTimer <= 0.0f) {
+        respawnTrainingDummy();
+    }
+}
+
+bool GameWorld::isTrainingDummy(std::size_t index) const {
+    return m_config.trainingDummy.enabled &&
+           index == static_cast<std::size_t>(m_config.trainingDummy.index) &&
+           index < m_playerCount;
+}
+
+int GameWorld::grabbedTarget(std::size_t playerIndex) const {
+    return playerIndex < m_playerCount ? m_grabbedTarget[playerIndex] : -1;
+}
+
+bool GameWorld::isGrabbed(std::size_t playerIndex) const {
+    return playerIndex < m_playerCount && m_grabbedBy[playerIndex] >= 0;
 }
 
 void GameWorld::updateCarHazard(float dt) {
@@ -160,9 +405,6 @@ void GameWorld::updateCarHazard(float dt) {
 
             if (!overlaps) continue;
 
-            // The car does not instantly eliminate the player. It launches
-            // them hard enough that they can still survive by landing or,
-            // later, grabbing the ledge when the grab system is connected.
             player.velocity.x = static_cast<float>(m_car.direction) *
                                 m_config.car.knockbackHorizontal;
             player.velocity.y = std::max(player.velocity.y,
@@ -200,6 +442,7 @@ int GameWorld::winnerId() const {
 }
 
 bool GameWorld::roundFinished() const {
+    if (m_config.trainingDummy.enabled) return false;
     return m_playerCount > 1 && aliveCount() <= 1;
 }
 
