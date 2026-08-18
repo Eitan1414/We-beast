@@ -80,6 +80,31 @@ jobs:
           test -f build-wiiu/webeast_wiiu.rpx
           ls -lh build-wiiu/webeast_wiiu.rpx
 
+      - name: Prepare WUHB embedded content
+        shell: bash
+        run: |
+          set -euo pipefail
+          EMBED_DIR=build-wuhb-content
+          mkdir -p "$EMBED_DIR"
+
+          # The renderer needs this before it can draw even the title screen.
+          cp assets/runtime/shaders/pos_col_shader.gsh "$EMBED_DIR/"
+
+          # Include any runtime assets already available in the repository/build.
+          cp build-runtime/*.wbm "$EMBED_DIR/" || true
+          if [ -f assets/runtime/audio/car_honk.pcm ]; then
+            cp assets/runtime/audio/car_honk.pcm "$EMBED_DIR/"
+          fi
+          if [ -f assets/runtime/map_01.wbm ]; then
+            cp assets/runtime/map_01.wbm "$EMBED_DIR/"
+          fi
+          if [ -f assets/runtime/map_02.wbm ]; then
+            cp assets/runtime/map_02.wbm "$EMBED_DIR/"
+          fi
+
+          test -s "$EMBED_DIR/pos_col_shader.gsh"
+          find "$EMBED_DIR" -maxdepth 1 -type f -print -exec ls -lh {} \;
+
       - name: Package Aroma WUHB
         shell: bash
         run: |
@@ -89,6 +114,7 @@ jobs:
           "$WUHBTOOL" \
             build-wiiu/webeast_wiiu.rpx \
             build-wiiu/WeBeast-V0.1.wuhb \
+            --content="build-wuhb-content" \
             --name="We Beast V0.1" \
             --short-name="We Beast" \
             --author="Pixel Electronics Studio"
@@ -103,12 +129,13 @@ jobs:
           CONTENT_DIR="$APPS_DIR/webeast/content"
           mkdir -p "$CONTENT_DIR"
 
-          # Aroma launches the WUHB directly from sd:/wiiu/apps/.
           cp build-wiiu/WeBeast-V0.1.wuhb "$APPS_DIR/"
 
-          # V0.1 currently reads runtime data from this SD content directory.
+          # Keep the external content folder too, for compatibility and for a
+          # user's existing map_01.wbm. The WUHB itself is now self-contained
+          # enough to reach the title screen without this directory.
           cp assets/runtime/shaders/pos_col_shader.gsh "$CONTENT_DIR/"
-          cp build-runtime/*.wbm "$CONTENT_DIR/"
+          cp build-runtime/*.wbm "$CONTENT_DIR/" || true
 
           if [ -f assets/runtime/audio/car_honk.pcm ]; then
             cp assets/runtime/audio/car_honk.pcm "$CONTENT_DIR/"
