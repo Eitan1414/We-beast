@@ -150,8 +150,14 @@ void DebugRenderer::addMapMesh() {
     const auto& vertices = m_mapMesh->vertices();
     const auto& indices = m_mapMesh->indices();
 
+    // Never allow a dense Map 1 mesh to consume the complete shared vertex
+    // buffer. Gameplay overlays (players, training Dummy, hazards) are appended
+    // after the map and must always have room to render on real hardware.
+    static constexpr std::uint32_t GameplayVertexReserve = 512;
+    static constexpr std::uint32_t MapVertexLimit = MaxVertices - GameplayVertexReserve;
+
     for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
-        if (m_vertexCount + 3 > MaxVertices) break;
+        if (m_vertexCount + 3 > MapVertexLimit) break;
 
         const WbmVertex& a = vertices[indices[i]];
         const WbmVertex& b = vertices[indices[i + 1]];
@@ -392,7 +398,7 @@ void DebugRenderer::draw(const GameWorld& world) {
         const PlayerState& player = world.player(i);
         const float x = worldToClipX(player.position.x);
         const float y = worldToClipY(player.position.z);
-        const float size = 0.045f + std::clamp(player.position.y, 0.0f, 3.0f) * 0.006f;
+        const float size = 0.060f + std::clamp(player.position.y, 0.0f, 3.0f) * 0.006f;
 
         if (player.eliminated) {
             addQuad(x - size, y - size, x + size, y + size,
@@ -403,11 +409,11 @@ void DebugRenderer::draw(const GameWorld& world) {
                         1.0f, 0.72f, 0.08f, 1.0f);
             } else {
                 addQuad(x - size, y - size, x + size, y + size,
-                        0.95f, 0.16f, 0.12f, 1.0f);
+                        1.0f, 0.06f, 0.04f, 1.0f);
             }
         } else {
             addQuad(x - size, y - size, x + size, y + size,
-                    0.15f, 0.55f, 1.0f, 1.0f);
+                    0.02f, 0.55f, 1.0f, 1.0f);
         }
     }
 
