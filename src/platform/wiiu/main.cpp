@@ -52,7 +52,7 @@ bool loadWbmFile(WbmMesh& mesh, const char* sdRoot, const char* fileName) {
 
 int loadPreferredMap(WbmMesh& mesh, const char* sdRoot) {
     // V0.1 solo combat intentionally boots Map 1 first. Map 2 is retained only
-    // as a fallback so an incomplete SD card still boots instead of crashing.
+    // as a fallback so an older SD setup can still display a real map.
     if (loadWbmFile(mesh, sdRoot, "map_01.wbm")) return 1;
     if (loadWbmFile(mesh, sdRoot, "map_02.wbm")) return 2;
     return 0;
@@ -118,12 +118,9 @@ int main(int, char**) {
 
     WbmMesh mapMesh;
     const int loadedMap = loadPreferredMap(mapMesh, sdRoot);
-    if (loadedMap == 0) {
-        WHBUnmountSdCard();
-        WHBGfxShutdown();
-        WHBProcShutdown();
-        return -3;
-    }
+    // If no WBM map is present, DebugRenderer deliberately draws its built-in
+    // baseplate fallback. This keeps the combat test bootable from a fresh CI
+    // package; copying the existing map_01.wbm onto the SD restores real Map 1.
 
     WbmMesh smallBoxMesh;
     WbmMesh bigBoxMesh;
@@ -145,8 +142,6 @@ int main(int, char**) {
         return -4;
     }
 
-    // Kept initialized for compatibility with the existing runtime, although
-    // V0.1 solo combat disables Map 2 hazards entirely.
     webeast::wiiu::HornPlayer horn;
     initHorn(horn, sdRoot);
 
