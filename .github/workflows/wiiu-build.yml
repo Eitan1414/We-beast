@@ -32,8 +32,6 @@ jobs:
           set -euo pipefail
           mkdir -p build-runtime
 
-          # Big box is already tracked in the repository and is now part of
-          # every native build instead of being represented by a debug square.
           python3 tools/glb_to_wbm.py \
             assets/source/props/big_box.glb \
             build-runtime/prop_big_box.wbm
@@ -51,8 +49,6 @@ jobs:
             echo "Optional prop source missing for $output; runtime marker fallback stays enabled."
           }
 
-          # These aliases match the names used while the models were being
-          # created. Once either GLB is committed it is picked up automatically.
           convert_optional_prop prop_small_box.wbm \
             assets/source/props/throwable_box_1.glb \
             "assets/source/props/throwable box 1.glb"
@@ -84,15 +80,33 @@ jobs:
           test -f build-wiiu/webeast_wiiu.rpx
           ls -lh build-wiiu/webeast_wiiu.rpx
 
-      - name: Prepare Wii U SD package
+      - name: Package Aroma WUHB
         shell: bash
         run: |
           set -euo pipefail
-          APP_DIR=dist/wiiu/apps/webeast
-          CONTENT_DIR="$APP_DIR/content"
+          WUHBTOOL="${DEVKITPRO}/tools/bin/wuhbtool"
+          test -x "$WUHBTOOL"
+          "$WUHBTOOL" \
+            build-wiiu/webeast_wiiu.rpx \
+            build-wiiu/WeBeast-V0.1.wuhb \
+            --name="We Beast V0.1" \
+            --short-name="We Beast" \
+            --author="Pixel Electronics Studio"
+          test -s build-wiiu/WeBeast-V0.1.wuhb
+          ls -lh build-wiiu/WeBeast-V0.1.wuhb
+
+      - name: Prepare Aroma SD package
+        shell: bash
+        run: |
+          set -euo pipefail
+          APPS_DIR=dist/wiiu/apps
+          CONTENT_DIR="$APPS_DIR/webeast/content"
           mkdir -p "$CONTENT_DIR"
 
-          cp build-wiiu/webeast_wiiu.rpx "$APP_DIR/"
+          # Aroma launches the WUHB directly from sd:/wiiu/apps/.
+          cp build-wiiu/WeBeast-V0.1.wuhb "$APPS_DIR/"
+
+          # V0.1 currently reads runtime data from this SD content directory.
           cp assets/runtime/shaders/pos_col_shader.gsh "$CONTENT_DIR/"
           cp build-runtime/*.wbm "$CONTENT_DIR/"
 
@@ -108,16 +122,16 @@ jobs:
 
           find dist -type f -maxdepth 6 -print -exec ls -lh {} \;
 
-      - name: Upload Wii U RPX
+      - name: Upload Aroma WUHB
         uses: actions/upload-artifact@v4
         with:
-          name: webeast-wiiu-rpx
+          name: webeast-v0.1-aroma-wuhb
           if-no-files-found: error
-          path: build-wiiu/webeast_wiiu.rpx
+          path: build-wiiu/WeBeast-V0.1.wuhb
 
-      - name: Upload Wii U SD package
+      - name: Upload Aroma SD package
         uses: actions/upload-artifact@v4
         with:
-          name: webeast-wiiu-sd-package
+          name: webeast-v0.1-aroma-sd-package
           if-no-files-found: error
           path: dist/wiiu/**
