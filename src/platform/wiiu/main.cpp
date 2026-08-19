@@ -10,6 +10,7 @@
 #include <whb/proc.h>
 #include <whb/sdcard.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -46,8 +47,6 @@ bool makeContentPath(char* out, std::size_t outSize,
     int written = -1;
     switch (source) {
     case 0:
-        // WHBReadWholeFile accepts an absolute Cafe OS path directly.
-        // WUHB --content is mounted by Aroma as /vol/content/.
         written = std::snprintf(out, outSize, "/vol/content/%s", fileName);
         break;
     case 1:
@@ -114,6 +113,7 @@ void loadMap2PropMeshes(WbmMesh& smallBox,
 
 bool initRenderer(webeast::wiiu::DebugRenderer& renderer,
                   const WbmMesh* mapMesh,
+                  const WbmMesh* dummyMesh,
                   const WbmMesh* smallBoxMesh,
                   const WbmMesh* bigBoxMesh,
                   const WbmMesh* explosiveBarrelMesh,
@@ -124,12 +124,32 @@ bool initRenderer(webeast::wiiu::DebugRenderer& renderer,
                              "pos_col_shader.gsh", source)) {
             continue;
         }
-        if (renderer.init(path, mapMesh,
+        if (renderer.init(path, mapMesh, dummyMesh,
                           smallBoxMesh, bigBoxMesh, explosiveBarrelMesh)) {
             return true;
         }
     }
     return false;
+}
+
+void fitPhysicsArenaToMap(GameWorldConfig& config, const WbmMesh& mapMesh) {
+    if (!mapMesh.valid()) return;
+
+    const WbmBounds& b = mapMesh.bounds();
+    const float centerX = (b.minX + b.maxX) * 0.5f;
+    const float centerZ = (b.minZ + b.maxZ) * 0.5f;
+    const float halfX = (b.maxX - b.minX) * 0.5f;
+    const float halfZ = (b.maxZ - b.minZ) * 0.5f;
+    const float sourceRadius = std::max(halfX, halfZ);
+    if (sourceRadius <= 0.000001f) return;
+
+    const float renderScale = 5.45f / sourceRadius;
+    const float safeInset = 0.96f;
+    config.player.floorMinX = (b.minX - centerX) * renderScale * safeInset;
+    config.player.floorMaxX = (b.maxX - centerX) * renderScale * safeInset;
+    config.player.floorMinZ = (b.minZ - centerZ) * renderScale * safeInset;
+    config.player.floorMaxZ = (b.maxZ - centerZ) * renderScale * safeInset;
+    config.player.floorY = 0.0f;
 }
 
 } // namespace
@@ -142,17 +162,18 @@ int main(int, char**) {
         return -1;
     }
 
-    // RED = ProcUI/GX2 got far enough to render a framebuffer.
     showBootStage(0.82f, 0.05f, 0.05f, 450);
 
     const bool sdMounted = WHBMountSdCard();
     const char* sdRoot = sdMounted ? WHBGetSdCardMountPath() : nullptr;
 
-    // CYAN = SD mount attempt returned; WUHB can continue even if it failed.
     showBootStage(0.04f, 0.58f, 0.72f, 450);
 
     WbmMesh mapMesh;
     const int loadedMap = loadPreferredMap(mapMesh, sdRoot);
+
+    WbmMesh dummyMesh;
+    loadWbmFile(dummyMesh, sdRoot, "dummy_01.wbm");
 
     WbmMesh smallBoxMesh;
     WbmMesh bigBoxMesh;
@@ -161,18 +182,16 @@ int main(int, char**) {
         loadMap2PropMeshes(smallBoxMesh, bigBoxMesh, explosiveBarrelMesh, sdRoot);
     }
 
-    // YELLOW = content/map probing completed; renderer/shader comes next.
     showBootStage(0.92f, 0.72f, 0.05f, 450);
 
     webeast::wiiu::DebugRenderer renderer;
     if (!initRenderer(renderer,
                       &mapMesh,
+                      &dummyMesh,
                       &smallBoxMesh,
                       &bigBoxMesh,
                       &explosiveBarrelMesh,
                       sdRoot)) {
-        // MAGENTA = shader or renderer initialization failed.
-        // Hold this colour long enough to be unmistakable on real hardware.
         for (int i = 0; i < 20 && WHBProcIsRunning(); ++i) {
             showBootStage(0.90f, 0.02f, 0.72f, 250);
         }
@@ -182,7 +201,6 @@ int main(int, char**) {
         return -4;
     }
 
-    // GREEN = shader + GX2 buffers initialized successfully.
     showBootStage(0.04f, 0.72f, 0.18f, 650);
 
     GameWorldConfig config{};
@@ -192,6 +210,7 @@ int main(int, char**) {
     config.combat.enabled = true;
     config.trainingDummy.enabled = true;
     config.trainingDummy.index = 1;
+    fitPhysicsArenaToMap(config, mapMesh);
 
     GameWorld world(0x57424541u);
     world.reset(2, config);
