@@ -66,6 +66,7 @@ jobs:
           set -euo pipefail
           mkdir -p build-runtime
 
+          # Prefer the real editable Map 2 once it is committed.
           if [ -f "assets/source/maps/map 2.glb" ]; then
             python3 tools/glb_to_wbm.py "assets/source/maps/map 2.glb" build-runtime/map_02.wbm
           elif [ -f assets/source/maps/map_02.glb ]; then
@@ -73,31 +74,58 @@ jobs:
           elif [ -f assets/runtime/map_02.wbm ]; then
             cp assets/runtime/map_02.wbm build-runtime/map_02.wbm
           else
-            # Temporary hardware-test arena. The real Map 2 GLB automatically
-            # replaces this as soon as it is tracked in assets/source/maps/.
+            # Hardware-test fallback: generate a tiny standards-compliant GLB,
+            # then run it through We Beast's own converter. This avoids duplicating
+            # the WBM1 binary layout here and guarantees parser compatibility.
             python3 - <<'PY'
-          import struct
+          import json, struct
           from pathlib import Path
 
-          out = Path('build-runtime/map_02.wbm')
-          vertices = [
-              (-6.0, 0.0, -6.0, 70, 92, 108, 255),
-              ( 6.0, 0.0, -6.0, 70, 92, 108, 255),
-              ( 6.0, 0.0,  6.0, 70, 92, 108, 255),
-              (-6.0, 0.0,  6.0, 70, 92, 108, 255),
+          positions = [
+              (-6.0, 0.0, -6.0),
+              ( 6.0, 0.0, -6.0),
+              ( 6.0, 0.0,  6.0),
+              (-6.0, 0.0,  6.0),
           ]
           indices = [0, 2, 1, 0, 3, 2]
 
-          data = bytearray()
-          data += b'WBM1'
-          data += struct.pack('>III', 1, len(vertices), len(indices))
-          for x, y, z, r, g, b, a in vertices:
-              data += struct.pack('>fffBBBB', x, y, z, r, g, b, a)
+          binary = bytearray()
+          for p in positions:
+              binary += struct.pack('<3f', *p)
+          index_offset = len(binary)
           for i in indices:
-              data += struct.pack('>I', i)
-          out.write_bytes(data)
-          print(f'Generated temporary hardware-test Map 2: {out} ({len(data)} bytes)')
+              binary += struct.pack('<H', i)
+          while len(binary) % 4:
+              binary += b'\0'
+
+          gltf = {
+              'asset': {'version': '2.0'},
+              'buffers': [{'byteLength': len(binary)}],
+              'bufferViews': [
+                  {'buffer': 0, 'byteOffset': 0, 'byteLength': len(positions) * 12, 'target': 34962},
+                  {'buffer': 0, 'byteOffset': index_offset, 'byteLength': len(indices) * 2, 'target': 34963},
+              ],
+              'accessors': [
+                  {'bufferView': 0, 'componentType': 5126, 'count': 4, 'type': 'VEC3',
+                   'min': [-6.0, 0.0, -6.0], 'max': [6.0, 0.0, 6.0]},
+                  {'bufferView': 1, 'componentType': 5123, 'count': 6, 'type': 'SCALAR'},
+              ],
+              'meshes': [{'primitives': [{'attributes': {'POSITION': 0}, 'indices': 1}]}],
+              'nodes': [{'mesh': 0}],
+              'scenes': [{'nodes': [0]}],
+              'scene': 0,
+          }
+
+          json_bytes = json.dumps(gltf, separators=(',', ':')).encode('utf-8')
+          while len(json_bytes) % 4:
+              json_bytes += b' '
+          total = 12 + 8 + len(json_bytes) + 8 + len(binary)
+          glb = bytearray(struct.pack('<III', 0x46546C67, 2, total))
+          glb += struct.pack('<II', len(json_bytes), 0x4E4F534A) + json_bytes
+          glb += struct.pack('<II', len(binary), 0x004E4942) + binary
+          Path('build-runtime/map_02_fallback.glb').write_bytes(glb)
           PY
+            python3 tools/glb_to_wbm.py build-runtime/map_02_fallback.glb build-runtime/map_02.wbm
           fi
 
           test -s build-runtime/map_02.wbm
