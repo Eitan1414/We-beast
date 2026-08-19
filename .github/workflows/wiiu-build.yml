@@ -60,6 +60,18 @@ jobs:
           test -s build-runtime/prop_big_box.wbm
           ls -lh build-runtime/*.wbm
 
+      - name: Restore V0.1 real Map 1 and Dummy assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build-runtime
+          cat assets/packed/v01_real_assets.part*.b64 \
+            | base64 -d > build-runtime/v01_real_assets.tgz
+          tar -xzf build-runtime/v01_real_assets.tgz -C build-runtime
+          test -s build-runtime/map_01.wbm
+          test -s build-runtime/dummy_01.wbm
+          ls -lh build-runtime/map_01.wbm build-runtime/dummy_01.wbm
+
       - name: Fetch known-good WUT GX2 shader
         shell: bash
         run: |
@@ -67,8 +79,6 @@ jobs:
           SHADER_URL="https://raw.githubusercontent.com/devkitPro/wut/47ae4139085fa2224655b63fa6c9916eeda716d3/samples/cmake/content/pos_col_shader.gsh"
           curl -fL "$SHADER_URL" -o build-runtime/pos_col_shader.gsh
 
-          # Pin both Git blob identity and expected size so a changed/corrupt
-          # binary can never silently enter the Aroma package.
           test "$(git hash-object build-runtime/pos_col_shader.gsh)" = "e1c4694b3c0e61fdd9b43842f5253339ed5cfafa"
           test "$(stat -c %s build-runtime/pos_col_shader.gsh)" = "1386"
           ls -lh build-runtime/pos_col_shader.gsh
@@ -100,21 +110,21 @@ jobs:
           EMBED_DIR=build-wuhb-content
           mkdir -p "$EMBED_DIR"
 
-          # Use the exact shader from devkitPro/WUT's working gx2_triangle sample.
           cp build-runtime/pos_col_shader.gsh "$EMBED_DIR/"
-
           cp build-runtime/*.wbm "$EMBED_DIR/" || true
+
           if [ -f assets/runtime/audio/car_honk.pcm ]; then
             cp assets/runtime/audio/car_honk.pcm "$EMBED_DIR/"
           fi
-          if [ -f assets/runtime/map_01.wbm ]; then
-            cp assets/runtime/map_01.wbm "$EMBED_DIR/"
-          fi
+          cp build-runtime/map_01.wbm "$EMBED_DIR/"
           if [ -f assets/runtime/map_02.wbm ]; then
             cp assets/runtime/map_02.wbm "$EMBED_DIR/"
           fi
+          cp build-runtime/dummy_01.wbm "$EMBED_DIR/"
 
           test -s "$EMBED_DIR/pos_col_shader.gsh"
+          test -s "$EMBED_DIR/map_01.wbm"
+          test -s "$EMBED_DIR/dummy_01.wbm"
           test "$(stat -c %s "$EMBED_DIR/pos_col_shader.gsh")" = "1386"
           find "$EMBED_DIR" -maxdepth 1 -type f -print -exec ls -lh {} \;
 
@@ -143,8 +153,6 @@ jobs:
           mkdir -p "$CONTENT_DIR"
 
           cp build-wiiu/WeBeast-V0.1.wuhb "$APPS_DIR/"
-
-          # Keep the same known-good shader in the external compatibility path.
           cp build-runtime/pos_col_shader.gsh "$CONTENT_DIR/"
           cp build-runtime/*.wbm "$CONTENT_DIR/" || true
 
@@ -154,9 +162,8 @@ jobs:
           if [ -f assets/runtime/map_02.wbm ]; then
             cp assets/runtime/map_02.wbm "$CONTENT_DIR/"
           fi
-          if [ -f assets/runtime/map_01.wbm ]; then
-            cp assets/runtime/map_01.wbm "$CONTENT_DIR/"
-          fi
+          cp build-runtime/map_01.wbm "$CONTENT_DIR/"
+          cp build-runtime/dummy_01.wbm "$CONTENT_DIR/"
 
           find dist -type f -maxdepth 6 -print -exec ls -lh {} \;
 
