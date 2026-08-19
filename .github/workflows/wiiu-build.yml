@@ -24,7 +24,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          dkp-pacman -Syu --needed --noconfirm wiiu-dev
+          dkp-pacman -Syu --needed --noconfirm wiiu-dev wut-tools
+          command -v wuhbtool
 
       - name: Convert GLB props to Wii U WBM
         shell: bash
@@ -121,7 +122,32 @@ jobs:
           fi
 
           test -s "$CONTENT_DIR/map_02.wbm"
+
+      - name: Build Aroma WUHB
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_DIR=dist/wiiu/apps/webeast
+          CONTENT_DIR="$APP_DIR/content"
+
+          wuhbtool \
+            "$APP_DIR/webeast_wiiu.rpx" \
+            "$APP_DIR/webeast_wiiu.wuhb" \
+            --content "$CONTENT_DIR" \
+            --name "WeBeast" \
+            --short-name "WeBeast" \
+            --author "Pixel Electronics Studio"
+
+          test -s "$APP_DIR/webeast_wiiu.wuhb"
+          ls -lh "$APP_DIR/webeast_wiiu.wuhb"
           find dist -type f -maxdepth 6 -print -exec ls -lh {} \;
+
+      - name: Upload Wii U WUHB
+        uses: actions/upload-artifact@v4
+        with:
+          name: webeast-wiiu-wuhb
+          if-no-files-found: error
+          path: dist/wiiu/apps/webeast/webeast_wiiu.wuhb
 
       - name: Upload Wii U RPX
         uses: actions/upload-artifact@v4
