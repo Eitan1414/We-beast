@@ -24,9 +24,9 @@ float applyDeadzone(float v, float deadzone = 0.14f) {
     return sign * ((std::fabs(v) - deadzone) / (1.0f - deadzone));
 }
 
-bool makeContentPath(char* out, std::size_t outSize,
-                     const char* sdRoot, const char* fileName,
-                     bool fallback) {
+bool makeSdContentPath(char* out, std::size_t outSize,
+                       const char* sdRoot, const char* fileName,
+                       bool fallback) {
     if (!out || !sdRoot || !fileName) return false;
     const int written = fallback
         ? std::snprintf(out, outSize, "%s/wut/content/%s", sdRoot, fileName)
@@ -34,25 +34,43 @@ bool makeContentPath(char* out, std::size_t outSize,
     return written > 0 && static_cast<std::size_t>(written) < outSize;
 }
 
-bool loadWbmFile(WbmMesh& mesh, const char* sdRoot, const char* fileName) {
+char* readContentFile(const char* fileName,
+                      const char* sdRoot,
+                      std::uint32_t* outSize) {
+    if (!fileName) return nullptr;
+
+    // In an Aroma WUHB, RPXLoadingModule redirects the bundle's /content
+    // directory to /vol/content. WHBReadWholeFile automatically prefixes
+    // relative paths with /vol/content, so try the bundled asset first.
+    if (char* bytes = WHBReadWholeFile(fileName, outSize)) {
+        return bytes;
+    }
+
+    // Keep standalone RPX compatibility for older/manual SD packages.
+    if (!sdRoot) return nullptr;
     char path[512]{};
     for (int fallback = 0; fallback < 2; ++fallback) {
-        if (!makeContentPath(path, sizeof(path), sdRoot, fileName, fallback != 0)) {
+        if (!makeSdContentPath(path, sizeof(path), sdRoot, fileName,
+                               fallback != 0)) {
             continue;
         }
-        std::uint32_t size = 0;
-        char* bytes = WHBReadWholeFile(path, &size);
-        if (!bytes) continue;
-        const bool ok = mesh.loadFromMemory(bytes, size);
-        WHBFreeWholeFile(bytes);
-        if (ok) return true;
+        if (char* bytes = WHBReadWholeFile(path, outSize)) {
+            return bytes;
+        }
     }
-    return false;
+    return nullptr;
+}
+
+bool loadWbmFile(WbmMesh& mesh, const char* sdRoot, const char* fileName) {
+    std::uint32_t size = 0;
+    char* bytes = readContentFile(fileName, sdRoot, &size);
+    if (!bytes) return false;
+    const bool ok = mesh.loadFromMemory(bytes, size);
+    WHBFreeWholeFile(bytes);
+    return ok;
 }
 
 int loadPreferredMap(WbmMesh& mesh, const char* sdRoot) {
-    // Current development target is Map 2. Keep Map 1 as a hardware-safe
-    // fallback so an older SD bundle can still boot the title screen/game.
     if (loadWbmFile(mesh, sdRoot, "map_02.wbm")) return 2;
     if (loadWbmFile(mesh, sdRoot, "map_01.wbm")) return 1;
     return 0;
@@ -62,8 +80,6 @@ void loadMap2PropMeshes(WbmMesh& smallBox,
                         WbmMesh& bigBox,
                         WbmMesh& explosiveBarrel,
                         const char* sdRoot) {
-    // Props are optional. If one is missing the renderer keeps its old marker,
-    // so a partial asset bundle can still be tested on real hardware.
     loadWbmFile(smallBox, sdRoot, "prop_small_box.wbm");
     loadWbmFile(bigBox, sdRoot, "prop_big_box.wbm");
     loadWbmFile(explosiveBarrel, sdRoot, "prop_explosive_barrel.wbm");
@@ -75,10 +91,18 @@ bool initRenderer(webeast::wiiu::DebugRenderer& renderer,
                   const WbmMesh* bigBoxMesh,
                   const WbmMesh* explosiveBarrelMesh,
                   const char* sdRoot) {
+    // Relative paths resolve to /vol/content, which is exactly where Aroma
+    // exposes a WUHB's bundled content.
+    if (renderer.init("pos_col_shader.gsh", mapMesh,
+                      smallBoxMesh, bigBoxMesh, explosiveBarrelMesh)) {
+        return true;
+    }
+
+    if (!sdRoot) return false;
     char path[512]{};
     for (int fallback = 0; fallback < 2; ++fallback) {
-        if (!makeContentPath(path, sizeof(path), sdRoot,
-                             "pos_col_shader.gsh", fallback != 0)) {
+        if (!makeSdContentPath(path, sizeof(path), sdRoot,
+                               "pos_col_shader.gsh", fallback != 0)) {
             continue;
         }
         if (renderer.init(path, mapMesh,
@@ -90,14 +114,16 @@ bool initRenderer(webeast::wiiu::DebugRenderer& renderer,
 }
 
 bool initHorn(webeast::wiiu::HornPlayer& horn, const char* sdRoot) {
+    // Audio is optional, but prefer the copy bundled in the WUHB.
+    if (horn.init("car_honk.pcm", 16000)) return true;
+
+    if (!sdRoot) return false;
     char path[512]{};
     for (int fallback = 0; fallback < 2; ++fallback) {
-        if (!makeContentPath(path, sizeof(path), sdRoot,
-                             "car_honk.pcm", fallback != 0)) {
+        if (!makeSdContentPath(path, sizeof(path), sdRoot,
+                               "car_honk.pcm", fallback != 0)) {
             continue;
         }
-        // The supplied MP3 is trimmed from 00:01 and preconverted offline to
-        // 16 kHz mono signed 16-bit big-endian PCM for a tiny Wii U runtime path.
         if (horn.init(path, 16000)) return true;
     }
     return false;
@@ -112,18 +138,16 @@ int main(int, char**) {
         WHBProcShutdown();
         return -1;
     }
-    if (!WHBMountSdCard()) {
-        WHBGfxShutdown();
-        WHBProcShutdown();
-        return -2;
-    }
 
-    const char* sdRoot = WHBGetSdCardMountPath();
+    // A WUHB does not need a second SD mount to access its bundled content.
+    // Mounting is only kept as an optional fallback for standalone RPX builds.
+    const bool sdMounted = WHBMountSdCard();
+    const char* sdRoot = sdMounted ? WHBGetSdCardMountPath() : nullptr;
 
     WbmMesh mapMesh;
     const int loadedMap = loadPreferredMap(mapMesh, sdRoot);
     if (loadedMap == 0) {
-        WHBUnmountSdCard();
+        if (sdMounted) WHBUnmountSdCard();
         WHBGfxShutdown();
         WHBProcShutdown();
         return -3;
@@ -143,14 +167,12 @@ int main(int, char**) {
                       &bigBoxMesh,
                       &explosiveBarrelMesh,
                       sdRoot)) {
-        WHBUnmountSdCard();
+        if (sdMounted) WHBUnmountSdCard();
         WHBGfxShutdown();
         WHBProcShutdown();
         return -4;
     }
 
-    // Audio is optional at boot: a missing horn asset must not prevent a
-    // graphics/gameplay hardware test from running.
     webeast::wiiu::HornPlayer horn;
     initHorn(horn, sdRoot);
 
@@ -163,7 +185,7 @@ int main(int, char**) {
 
     bool inGame = false;
     bool optionsOpen = false;
-    std::uint32_t selectedItem = 0; // 0 = PLAY, 1 = OPTIONS
+    std::uint32_t selectedItem = 0;
     std::uint32_t lastCarWarningSerial = world.car().warningSerial;
 
     while (WHBProcIsRunning()) {
@@ -229,7 +251,7 @@ int main(int, char**) {
 
     horn.shutdown();
     renderer.shutdown();
-    WHBUnmountSdCard();
+    if (sdMounted) WHBUnmountSdCard();
     WHBGfxShutdown();
     WHBProcShutdown();
     return 0;
