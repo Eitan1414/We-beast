@@ -63,13 +63,30 @@ struct MapPropSpawnConfig {
         { 2.54f, 0.20f,  4.37f},
         { 2.54f, 0.20f, -3.02f},
     }};
+
+    // Lightweight rigid-body settings intentionally kept simple for Wii U.
+    // Full grabbing/throwing and barrel damage are separate gameplay systems.
+    float gravity = -18.0f;
+    float groundDrag = 5.0f;
+    float restitution = 0.18f;
+    float maxSpeed = 12.0f;
+    float playerPushFactor = 0.78f;
+    float playerReactionFactor = 0.10f;
+    float killY = -5.0f;
+
+    float smallBoxRadius = 0.32f;
+    float bigBoxRadius = 0.54f;
+    float explosiveBarrelRadius = 0.40f;
 };
 
 struct SpawnedMapProp {
     MapPropType type = MapPropType::None;
     Vec3 position{};
+    Vec3 velocity{};
+    float collisionRadius = 0.35f;
     std::uint8_t spawnSlot = 0;
     bool active = false;
+    bool grounded = false;
 };
 
 struct GameWorldConfig {
@@ -108,9 +125,12 @@ public:
 private:
     void fixedUpdate(const PlayerInput* inputs, std::size_t inputCount, float dt);
     void updateCarHazard(float dt);
+    void updateMapProps(float dt);
+    void solvePlayerPropCollisions();
     void scheduleNextCar();
     void spawnMapProps();
     MapPropType randomMapPropType();
+    float mapPropRadius(MapPropType type) const;
     float nextRandom01();
 
     GameWorldConfig m_config{};
