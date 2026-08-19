@@ -1,5 +1,4 @@
 #include "DebugRenderer.hpp"
-#include "HornPlayer.hpp"
 #include "assets/WbmMesh.hpp"
 #include "game/GameWorld.hpp"
 
@@ -11,6 +10,7 @@
 #include <whb/proc.h>
 #include <whb/sdcard.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -24,37 +24,81 @@ float applyDeadzone(float v, float deadzone = 0.14f) {
     return sign * ((std::fabs(v) - deadzone) / (1.0f - deadzone));
 }
 
+void showBootStage(float r, float g, float b, std::uint32_t milliseconds) {
+    WHBGfxBeginRender();
+
+    WHBGfxBeginRenderTV();
+    WHBGfxClearColor(r, g, b, 1.0f);
+    WHBGfxFinishRenderTV();
+
+    WHBGfxBeginRenderDRC();
+    WHBGfxClearColor(r, g, b, 1.0f);
+    WHBGfxFinishRenderDRC();
+
+    WHBGfxFinishRender();
+    OSSleepTicks(OSMillisecondsToTicks(milliseconds));
+}
+
 bool makeContentPath(char* out, std::size_t outSize,
                      const char* sdRoot, const char* fileName,
-                     bool fallback) {
-    if (!out || !sdRoot || !fileName) return false;
-    const int written = fallback
-        ? std::snprintf(out, outSize, "%s/wut/content/%s", sdRoot, fileName)
-        : std::snprintf(out, outSize, "%s/wiiu/apps/webeast/content/%s", sdRoot, fileName);
+                     int source) {
+    if (!out || !fileName) return false;
+
+    int written = -1;
+    switch (source) {
+    case 0:
+        written = std::snprintf(out, outSize, "/vol/content/%s", fileName);
+        break;
+    case 1:
+        if (!sdRoot) return false;
+        written = std::snprintf(out, outSize,
+                                "%s/wiiu/apps/webeast/content/%s",
+                                sdRoot, fileName);
+        break;
+    case 2:
+        if (!sdRoot) return false;
+        written = std::snprintf(out, outSize,
+                                "%s/wut/content/%s",
+                                sdRoot, fileName);
+        break;
+    default:
+        return false;
+    }
+
     return written > 0 && static_cast<std::size_t>(written) < outSize;
 }
 
-bool loadWbmFile(WbmMesh& mesh, const char* sdRoot, const char* fileName) {
+bool readContentFile(const char* sdRoot,
+                     const char* fileName,
+                     char*& bytes,
+                     std::uint32_t& size) {
+    bytes = nullptr;
+    size = 0;
+
     char path[512]{};
-    for (int fallback = 0; fallback < 2; ++fallback) {
-        if (!makeContentPath(path, sizeof(path), sdRoot, fileName, fallback != 0)) {
+    for (int source = 0; source < 3; ++source) {
+        if (!makeContentPath(path, sizeof(path), sdRoot, fileName, source)) {
             continue;
         }
-        std::uint32_t size = 0;
-        char* bytes = WHBReadWholeFile(path, &size);
-        if (!bytes) continue;
-        const bool ok = mesh.loadFromMemory(bytes, size);
-        WHBFreeWholeFile(bytes);
-        if (ok) return true;
+        bytes = WHBReadWholeFile(path, &size);
+        if (bytes) return true;
     }
     return false;
 }
 
+bool loadWbmFile(WbmMesh& mesh, const char* sdRoot, const char* fileName) {
+    char* bytes = nullptr;
+    std::uint32_t size = 0;
+    if (!readContentFile(sdRoot, fileName, bytes, size)) return false;
+
+    const bool ok = mesh.loadFromMemory(bytes, size);
+    WHBFreeWholeFile(bytes);
+    return ok;
+}
+
 int loadPreferredMap(WbmMesh& mesh, const char* sdRoot) {
-    // Current development target is Map 2. Keep Map 1 as a hardware-safe
-    // fallback so an older SD bundle can still boot the title screen/game.
-    if (loadWbmFile(mesh, sdRoot, "map_02.wbm")) return 2;
     if (loadWbmFile(mesh, sdRoot, "map_01.wbm")) return 1;
+    if (loadWbmFile(mesh, sdRoot, "map_02.wbm")) return 2;
     return 0;
 }
 
@@ -62,8 +106,6 @@ void loadMap2PropMeshes(WbmMesh& smallBox,
                         WbmMesh& bigBox,
                         WbmMesh& explosiveBarrel,
                         const char* sdRoot) {
-    // Props are optional. If one is missing the renderer keeps its old marker,
-    // so a partial asset bundle can still be tested on real hardware.
     loadWbmFile(smallBox, sdRoot, "prop_small_box.wbm");
     loadWbmFile(bigBox, sdRoot, "prop_big_box.wbm");
     loadWbmFile(explosiveBarrel, sdRoot, "prop_explosive_barrel.wbm");
@@ -71,17 +113,18 @@ void loadMap2PropMeshes(WbmMesh& smallBox,
 
 bool initRenderer(webeast::wiiu::DebugRenderer& renderer,
                   const WbmMesh* mapMesh,
+                  const WbmMesh* dummyMesh,
                   const WbmMesh* smallBoxMesh,
                   const WbmMesh* bigBoxMesh,
                   const WbmMesh* explosiveBarrelMesh,
                   const char* sdRoot) {
     char path[512]{};
-    for (int fallback = 0; fallback < 2; ++fallback) {
+    for (int source = 0; source < 3; ++source) {
         if (!makeContentPath(path, sizeof(path), sdRoot,
-                             "pos_col_shader.gsh", fallback != 0)) {
+                             "pos_col_shader.gsh", source)) {
             continue;
         }
-        if (renderer.init(path, mapMesh,
+        if (renderer.init(path, mapMesh, dummyMesh,
                           smallBoxMesh, bigBoxMesh, explosiveBarrelMesh)) {
             return true;
         }
@@ -89,18 +132,24 @@ bool initRenderer(webeast::wiiu::DebugRenderer& renderer,
     return false;
 }
 
-bool initHorn(webeast::wiiu::HornPlayer& horn, const char* sdRoot) {
-    char path[512]{};
-    for (int fallback = 0; fallback < 2; ++fallback) {
-        if (!makeContentPath(path, sizeof(path), sdRoot,
-                             "car_honk.pcm", fallback != 0)) {
-            continue;
-        }
-        // The supplied MP3 is trimmed from 00:01 and preconverted offline to
-        // 16 kHz mono signed 16-bit big-endian PCM for a tiny Wii U runtime path.
-        if (horn.init(path, 16000)) return true;
-    }
-    return false;
+void fitPhysicsArenaToMap(GameWorldConfig& config, const WbmMesh& mapMesh) {
+    if (!mapMesh.valid()) return;
+
+    const WbmBounds& b = mapMesh.bounds();
+    const float centerX = (b.minX + b.maxX) * 0.5f;
+    const float centerZ = (b.minZ + b.maxZ) * 0.5f;
+    const float halfX = (b.maxX - b.minX) * 0.5f;
+    const float halfZ = (b.maxZ - b.minZ) * 0.5f;
+    const float sourceRadius = std::max(halfX, halfZ);
+    if (sourceRadius <= 0.000001f) return;
+
+    const float renderScale = 5.45f / sourceRadius;
+    const float safeInset = 0.96f;
+    config.player.floorMinX = (b.minX - centerX) * renderScale * safeInset;
+    config.player.floorMaxX = (b.maxX - centerX) * renderScale * safeInset;
+    config.player.floorMinZ = (b.minZ - centerZ) * renderScale * safeInset;
+    config.player.floorMaxZ = (b.maxZ - centerZ) * renderScale * safeInset;
+    config.player.floorY = 0.0f;
 }
 
 } // namespace
@@ -112,22 +161,19 @@ int main(int, char**) {
         WHBProcShutdown();
         return -1;
     }
-    if (!WHBMountSdCard()) {
-        WHBGfxShutdown();
-        WHBProcShutdown();
-        return -2;
-    }
 
-    const char* sdRoot = WHBGetSdCardMountPath();
+    showBootStage(0.82f, 0.05f, 0.05f, 450);
+
+    const bool sdMounted = WHBMountSdCard();
+    const char* sdRoot = sdMounted ? WHBGetSdCardMountPath() : nullptr;
+
+    showBootStage(0.04f, 0.58f, 0.72f, 450);
 
     WbmMesh mapMesh;
     const int loadedMap = loadPreferredMap(mapMesh, sdRoot);
-    if (loadedMap == 0) {
-        WHBUnmountSdCard();
-        WHBGfxShutdown();
-        WHBProcShutdown();
-        return -3;
-    }
+
+    WbmMesh dummyMesh;
+    loadWbmFile(dummyMesh, sdRoot, "dummy_01.wbm");
 
     WbmMesh smallBoxMesh;
     WbmMesh bigBoxMesh;
@@ -136,35 +182,42 @@ int main(int, char**) {
         loadMap2PropMeshes(smallBoxMesh, bigBoxMesh, explosiveBarrelMesh, sdRoot);
     }
 
+    showBootStage(0.92f, 0.72f, 0.05f, 450);
+
     webeast::wiiu::DebugRenderer renderer;
     if (!initRenderer(renderer,
                       &mapMesh,
+                      &dummyMesh,
                       &smallBoxMesh,
                       &bigBoxMesh,
                       &explosiveBarrelMesh,
                       sdRoot)) {
-        WHBUnmountSdCard();
+        for (int i = 0; i < 20 && WHBProcIsRunning(); ++i) {
+            showBootStage(0.90f, 0.02f, 0.72f, 250);
+        }
+        if (sdMounted) WHBUnmountSdCard();
         WHBGfxShutdown();
         WHBProcShutdown();
         return -4;
     }
 
-    // Audio is optional at boot: a missing horn asset must not prevent a
-    // graphics/gameplay hardware test from running.
-    webeast::wiiu::HornPlayer horn;
-    initHorn(horn, sdRoot);
+    showBootStage(0.04f, 0.72f, 0.18f, 650);
 
     GameWorldConfig config{};
-    config.car.enabled = loadedMap == 2;
-    config.props.enabled = loadedMap == 2;
+    config.ballEnabled = false;
+    config.car.enabled = false;
+    config.props.enabled = false;
+    config.combat.enabled = true;
+    config.trainingDummy.enabled = true;
+    config.trainingDummy.index = 1;
+    fitPhysicsArenaToMap(config, mapMesh);
 
     GameWorld world(0x57424541u);
-    world.reset(1, config);
+    world.reset(2, config);
 
     bool inGame = false;
     bool optionsOpen = false;
-    std::uint32_t selectedItem = 0; // 0 = PLAY, 1 = OPTIONS
-    std::uint32_t lastCarWarningSerial = world.car().warningSerial;
+    std::uint32_t selectedItem = 0;
 
     while (WHBProcIsRunning()) {
         PlayerInput input{};
@@ -186,8 +239,7 @@ int main(int, char**) {
                     }
                     if ((status.trigger & VPAD_BUTTON_A) != 0) {
                         if (selectedItem == 0) {
-                            world.reset(1, config);
-                            lastCarWarningSerial = world.car().warningSerial;
+                            world.reset(2, config);
                             inGame = true;
                         } else {
                             optionsOpen = true;
@@ -198,10 +250,11 @@ int main(int, char**) {
                 input.moveX = applyDeadzone(status.leftStick.x);
                 input.moveZ = -applyDeadzone(status.leftStick.y);
                 input.jumpPressed = (status.trigger & VPAD_BUTTON_A) != 0;
+                input.punchPressed = (status.trigger & VPAD_BUTTON_Y) != 0;
+                input.grabHeld = ((status.hold | status.trigger) & VPAD_BUTTON_ZR) != 0;
 
                 if ((status.trigger & VPAD_BUTTON_MINUS) != 0) {
-                    world.reset(1, config);
-                    lastCarWarningSerial = world.car().warningSerial;
+                    world.reset(2, config);
                 }
                 if ((status.trigger & VPAD_BUTTON_PLUS) != 0) {
                     inGame = false;
@@ -212,13 +265,6 @@ int main(int, char**) {
 
         if (inGame) {
             world.update(1.0f / 60.0f, &input, 1);
-
-            const std::uint32_t warningSerial = world.car().warningSerial;
-            if (warningSerial != lastCarWarningSerial) {
-                lastCarWarningSerial = warningSerial;
-                if (warningSerial != 0) horn.play();
-            }
-
             renderer.draw(world);
         } else {
             renderer.drawTitleScreen(selectedItem, optionsOpen);
@@ -227,9 +273,8 @@ int main(int, char**) {
         OSSleepTicks(OSMillisecondsToTicks(1));
     }
 
-    horn.shutdown();
     renderer.shutdown();
-    WHBUnmountSdCard();
+    if (sdMounted) WHBUnmountSdCard();
     WHBGfxShutdown();
     WHBProcShutdown();
     return 0;

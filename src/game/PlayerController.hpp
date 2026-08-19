@@ -8,6 +8,11 @@ struct PlayerInput {
     float moveX = 0.0f;
     float moveZ = 0.0f;
     bool jumpPressed = false;
+
+    // V0.1 combat inputs. Punch is edge-triggered while grab is held for as
+    // long as the player wants to carry a target. Releasing grab throws it.
+    bool punchPressed = false;
+    bool grabHeld = false;
 };
 
 struct PlayerControllerConfig {
@@ -27,6 +32,10 @@ struct PlayerControllerConfig {
 
 struct PlayerRuntimeState {
     bool grounded = false;
+
+    // Last meaningful movement direction. The V0.1 combat prototype uses it
+    // as the player's facing direction for punch, grab and throw.
+    Vec3 facing{1.0f, 0.0f, 0.0f};
 };
 
 class PlayerController {

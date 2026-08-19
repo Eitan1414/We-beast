@@ -34,6 +34,11 @@ void PlayerController::update(PlayerState& player,
         desired.z *= invLen;
     }
 
+    if (inputLengthSq > 0.01f) {
+        const float invLen = 1.0f / std::sqrt(desired.x * desired.x + desired.z * desired.z);
+        runtime.facing = {desired.x * invLen, 0.0f, desired.z * invLen};
+    }
+
     player.velocity.x += desired.x * acceleration * dt;
     player.velocity.z += desired.z * acceleration * dt;
 

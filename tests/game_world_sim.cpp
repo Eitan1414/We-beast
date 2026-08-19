@@ -96,6 +96,72 @@ int main() {
         assert(std::fabs(prop.position.z - expected.z) < 0.0001f);
     }
 
+    // V0.1 solo training: player 0 fights player 1, which is a no-AI dummy.
+    GameWorldConfig trainingConfig{};
+    trainingConfig.ballEnabled = false;
+    trainingConfig.combat.enabled = true;
+    trainingConfig.trainingDummy.enabled = true;
+    trainingConfig.trainingDummy.index = 1;
+    trainingConfig.trainingDummy.respawnDelaySeconds = 0.15f;
+
+    GameWorld trainingWorld(0xBEEF1234u);
+    trainingWorld.reset(2, trainingConfig);
+
+    assert(trainingWorld.isTrainingDummy(1));
+    assert(!trainingWorld.isTrainingDummy(0));
+    assert(trainingWorld.grabbedTarget(0) == -1);
+
+    // Punching from the default facing direction must physically launch the
+    // stationary dummy without eliminating it instantly.
+    PlayerInput punch{};
+    punch.punchPressed = true;
+    trainingWorld.update(1.0f / 60.0f, &punch, 1);
+    assert(trainingWorld.player(1).velocity.x > 3.0f);
+    assert(trainingWorld.player(1).velocity.y > 1.0f);
+    assert(!trainingWorld.player(1).eliminated);
+
+    // Reset, grab with ZR semantics, move while carrying, then release to throw.
+    trainingWorld.reset(2, trainingConfig);
+    PlayerInput grab{};
+    grab.grabHeld = true;
+    trainingWorld.update(1.0f / 60.0f, &grab, 1);
+    assert(trainingWorld.grabbedTarget(0) == 1);
+    assert(trainingWorld.isGrabbed(1));
+
+    grab.moveX = 1.0f;
+    for (int i = 0; i < 20; ++i) {
+        trainingWorld.update(1.0f / 60.0f, &grab, 1);
+    }
+    const float carriedDistance =
+        std::fabs(trainingWorld.player(1).position.x - trainingWorld.player(0).position.x);
+    assert(carriedDistance < trainingConfig.combat.holdDistance + 0.10f);
+
+    PlayerInput release{};
+    trainingWorld.update(1.0f / 60.0f, &release, 1);
+    assert(trainingWorld.grabbedTarget(0) == -1);
+    assert(!trainingWorld.isGrabbed(1));
+    assert(trainingWorld.player(1).velocity.x > 7.0f);
+    assert(trainingWorld.player(1).velocity.y > 3.0f);
+
+    // If the target is thrown/falls outside Map 1, the solo-test dummy must
+    // come back automatically so one person can keep testing combat.
+    trainingWorld.player(1).position = {
+        trainingConfig.player.floorMaxX + 1.0f,
+        trainingConfig.player.killY - 0.5f,
+        0.0f,
+    };
+    trainingWorld.player(1).velocity = {};
+
+    for (int i = 0; i < 120; ++i) {
+        trainingWorld.update(1.0f / 60.0f, &release, 1);
+    }
+
+    assert(!trainingWorld.player(1).eliminated);
+    assert(std::fabs(trainingWorld.player(1).position.x -
+                     trainingConfig.trainingDummy.dummySpawn.x) < 0.05f);
+    assert(std::fabs(trainingWorld.player(1).position.z -
+                     trainingConfig.trainingDummy.dummySpawn.z) < 0.05f);
+
     std::cout << "game_world_sim: OK\n";
     return 0;
 }

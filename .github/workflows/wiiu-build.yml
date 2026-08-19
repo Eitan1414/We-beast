@@ -32,8 +32,6 @@ jobs:
           set -euo pipefail
           mkdir -p build-runtime
 
-          # Big box is already tracked in the repository and is now part of
-          # every native build instead of being represented by a debug square.
           python3 tools/glb_to_wbm.py \
             assets/source/props/big_box.glb \
             build-runtime/prop_big_box.wbm
@@ -51,8 +49,6 @@ jobs:
             echo "Optional prop source missing for $output; runtime marker fallback stays enabled."
           }
 
-          # These aliases match the names used while the models were being
-          # created. Once either GLB is committed it is picked up automatically.
           convert_optional_prop prop_small_box.wbm \
             assets/source/props/throwable_box_1.glb \
             "assets/source/props/throwable box 1.glb"
@@ -63,6 +59,29 @@ jobs:
 
           test -s build-runtime/prop_big_box.wbm
           ls -lh build-runtime/*.wbm
+
+      - name: Restore V0.1 real Map 1 and Dummy assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build-runtime
+          cat assets/packed/v01_real_assets.part*.b64 \
+            | base64 -d > build-runtime/v01_real_assets.tgz
+          tar -xzf build-runtime/v01_real_assets.tgz -C build-runtime
+          test -s build-runtime/map_01.wbm
+          test -s build-runtime/dummy_01.wbm
+          ls -lh build-runtime/map_01.wbm build-runtime/dummy_01.wbm
+
+      - name: Fetch known-good WUT GX2 shader
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHADER_URL="https://raw.githubusercontent.com/devkitPro/wut/47ae4139085fa2224655b63fa6c9916eeda716d3/samples/cmake/content/pos_col_shader.gsh"
+          curl -fL "$SHADER_URL" -o build-runtime/pos_col_shader.gsh
+
+          test "$(git hash-object build-runtime/pos_col_shader.gsh)" = "e1c4694b3c0e61fdd9b43842f5253339ed5cfafa"
+          test "$(stat -c %s build-runtime/pos_col_shader.gsh)" = "1386"
+          ls -lh build-runtime/pos_col_shader.gsh
 
       - name: Configure Wii U build
         shell: bash
@@ -84,17 +103,58 @@ jobs:
           test -f build-wiiu/webeast_wiiu.rpx
           ls -lh build-wiiu/webeast_wiiu.rpx
 
-      - name: Prepare Wii U SD package
+      - name: Prepare WUHB embedded content
         shell: bash
         run: |
           set -euo pipefail
-          APP_DIR=dist/wiiu/apps/webeast
-          CONTENT_DIR="$APP_DIR/content"
+          EMBED_DIR=build-wuhb-content
+          mkdir -p "$EMBED_DIR"
+
+          cp build-runtime/pos_col_shader.gsh "$EMBED_DIR/"
+          cp build-runtime/*.wbm "$EMBED_DIR/" || true
+
+          if [ -f assets/runtime/audio/car_honk.pcm ]; then
+            cp assets/runtime/audio/car_honk.pcm "$EMBED_DIR/"
+          fi
+          cp build-runtime/map_01.wbm "$EMBED_DIR/"
+          if [ -f assets/runtime/map_02.wbm ]; then
+            cp assets/runtime/map_02.wbm "$EMBED_DIR/"
+          fi
+          cp build-runtime/dummy_01.wbm "$EMBED_DIR/"
+
+          test -s "$EMBED_DIR/pos_col_shader.gsh"
+          test -s "$EMBED_DIR/map_01.wbm"
+          test -s "$EMBED_DIR/dummy_01.wbm"
+          test "$(stat -c %s "$EMBED_DIR/pos_col_shader.gsh")" = "1386"
+          find "$EMBED_DIR" -maxdepth 1 -type f -print -exec ls -lh {} \;
+
+      - name: Package Aroma WUHB
+        shell: bash
+        run: |
+          set -euo pipefail
+          WUHBTOOL="${DEVKITPRO}/tools/bin/wuhbtool"
+          test -x "$WUHBTOOL"
+          "$WUHBTOOL" \
+            build-wiiu/webeast_wiiu.rpx \
+            build-wiiu/WeBeast-V0.1.wuhb \
+            --content="build-wuhb-content" \
+            --name="We Beast V0.1" \
+            --short-name="We Beast" \
+            --author="Pixel Electronics Studio"
+          test -s build-wiiu/WeBeast-V0.1.wuhb
+          ls -lh build-wiiu/WeBeast-V0.1.wuhb
+
+      - name: Prepare Aroma SD package
+        shell: bash
+        run: |
+          set -euo pipefail
+          APPS_DIR=dist/wiiu/apps
+          CONTENT_DIR="$APPS_DIR/webeast/content"
           mkdir -p "$CONTENT_DIR"
 
-          cp build-wiiu/webeast_wiiu.rpx "$APP_DIR/"
-          cp assets/runtime/shaders/pos_col_shader.gsh "$CONTENT_DIR/"
-          cp build-runtime/*.wbm "$CONTENT_DIR/"
+          cp build-wiiu/WeBeast-V0.1.wuhb "$APPS_DIR/"
+          cp build-runtime/pos_col_shader.gsh "$CONTENT_DIR/"
+          cp build-runtime/*.wbm "$CONTENT_DIR/" || true
 
           if [ -f assets/runtime/audio/car_honk.pcm ]; then
             cp assets/runtime/audio/car_honk.pcm "$CONTENT_DIR/"
@@ -102,22 +162,21 @@ jobs:
           if [ -f assets/runtime/map_02.wbm ]; then
             cp assets/runtime/map_02.wbm "$CONTENT_DIR/"
           fi
-          if [ -f assets/runtime/map_01.wbm ]; then
-            cp assets/runtime/map_01.wbm "$CONTENT_DIR/"
-          fi
+          cp build-runtime/map_01.wbm "$CONTENT_DIR/"
+          cp build-runtime/dummy_01.wbm "$CONTENT_DIR/"
 
           find dist -type f -maxdepth 6 -print -exec ls -lh {} \;
 
-      - name: Upload Wii U RPX
+      - name: Upload Aroma WUHB
         uses: actions/upload-artifact@v4
         with:
-          name: webeast-wiiu-rpx
+          name: webeast-v0.1-aroma-wuhb
           if-no-files-found: error
-          path: build-wiiu/webeast_wiiu.rpx
+          path: build-wiiu/WeBeast-V0.1.wuhb
 
-      - name: Upload Wii U SD package
+      - name: Upload Aroma SD package
         uses: actions/upload-artifact@v4
         with:
-          name: webeast-wiiu-sd-package
+          name: webeast-v0.1-aroma-sd-package
           if-no-files-found: error
           path: dist/wiiu/**
