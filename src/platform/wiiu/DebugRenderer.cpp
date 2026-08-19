@@ -1,6 +1,7 @@
 #include "DebugRenderer.hpp"
 
 #include <gx2/draw.h>
+#include <gx2/registers.h>
 #include <gx2/shaders.h>
 #include <gx2r/draw.h>
 #include <whb/file.h>
@@ -13,6 +14,7 @@ namespace webeast::wiiu {
 
 bool DebugRenderer::init(const char* shaderPath,
                          const WbmMesh* mapMesh,
+                         const WbmMesh* dummyMesh,
                          const WbmMesh* smallBoxMesh,
                          const WbmMesh* bigBoxMesh,
                          const WbmMesh* explosiveBarrelMesh) {
@@ -59,6 +61,7 @@ bool DebugRenderer::init(const char* shaderPath,
     m_positions.reserve(MaxVertices * 4);
     m_colours.reserve(MaxVertices * 4);
     m_mapMesh = mapMesh;
+    m_dummyMesh = dummyMesh;
     m_smallBoxMesh = smallBoxMesh;
     m_bigBoxMesh = bigBoxMesh;
     m_explosiveBarrelMesh = explosiveBarrelMesh;
@@ -74,6 +77,7 @@ void DebugRenderer::shutdown() {
     m_positions.clear();
     m_colours.clear();
     m_mapMesh = nullptr;
+    m_dummyMesh = nullptr;
     m_smallBoxMesh = nullptr;
     m_bigBoxMesh = nullptr;
     m_explosiveBarrelMesh = nullptr;
@@ -88,20 +92,25 @@ float DebugRenderer::worldToClipY(float z) const {
     return std::clamp((-z / 6.5f) * 0.88f, -0.94f, 0.94f);
 }
 
-float DebugRenderer::mapToClipX(float x) const {
-    if (!m_mapMesh || !m_mapMesh->valid()) return 0.0f;
-    const WbmBounds& b = m_mapMesh->bounds();
-    const float width = b.maxX - b.minX;
-    if (std::fabs(width) < 0.000001f) return 0.0f;
-    return (((x - b.minX) / width) * 2.0f - 1.0f) * 0.88f;
-}
+void DebugRenderer::projectWorld(float x, float y, float z,
+                                 float& clipX, float& clipY, float& clipZ) const {
+    constexpr float RightX =  0.78086881f;
+    constexpr float RightY =  0.0f;
+    constexpr float RightZ = -0.62469505f;
+    constexpr float UpX = -0.38447322f;
+    constexpr float UpY =  0.78817011f;
+    constexpr float UpZ = -0.48059153f;
+    constexpr float ForwardX = -0.49236596f;
+    constexpr float ForwardY = -0.61545745f;
+    constexpr float ForwardZ = -0.61545745f;
 
-float DebugRenderer::mapToClipY(float z) const {
-    if (!m_mapMesh || !m_mapMesh->valid()) return 0.0f;
-    const WbmBounds& b = m_mapMesh->bounds();
-    const float depth = b.maxZ - b.minZ;
-    if (std::fabs(depth) < 0.000001f) return 0.0f;
-    return -(((z - b.minZ) / depth) * 2.0f - 1.0f) * 0.88f;
+    const float viewX = x * RightX + y * RightY + z * RightZ;
+    const float viewY = x * UpX + y * UpY + z * UpZ;
+    const float viewDepth = x * ForwardX + y * ForwardY + z * ForwardZ;
+
+    clipX = std::clamp((viewX / 8.1f) * 0.92f, -0.98f, 0.98f);
+    clipY = std::clamp((viewY / 6.2f) * 0.92f, -0.98f, 0.98f);
+    clipZ = std::clamp(0.50f + viewDepth / 20.0f, 0.02f, 0.98f);
 }
 
 void DebugRenderer::beginGeometry() {
@@ -112,8 +121,13 @@ void DebugRenderer::beginGeometry() {
 
 void DebugRenderer::appendVertex(float x, float y,
                                  float r, float g, float b, float a) {
+    appendVertex3D(x, y, 0.0f, r, g, b, a);
+}
+
+void DebugRenderer::appendVertex3D(float x, float y, float z,
+                                   float r, float g, float b, float a) {
     if (m_vertexCount >= MaxVertices) return;
-    m_positions.insert(m_positions.end(), {x, y, 0.0f, 1.0f});
+    m_positions.insert(m_positions.end(), {x, y, z, 1.0f});
     m_colours.insert(m_colours.end(), {r, g, b, a});
     ++m_vertexCount;
 }
@@ -143,40 +157,101 @@ void DebugRenderer::addDiamond(float cx, float cy, float radius,
 
 void DebugRenderer::addMapMesh() {
     if (!m_mapMesh || !m_mapMesh->valid()) {
-        addQuad(-0.88f, -0.88f, 0.88f, 0.88f, 0.23f, 0.47f, 0.28f, 1.0f);
+        addQuad(-0.78f, -0.56f, 0.78f, 0.56f, 0.23f, 0.47f, 0.28f, 1.0f);
         return;
     }
 
+    const WbmBounds& bounds = m_mapMesh->bounds();
+    const float centerX = (bounds.minX + bounds.maxX) * 0.5f;
+    const float centerZ = (bounds.minZ + bounds.maxZ) * 0.5f;
+    const float halfX = (bounds.maxX - bounds.minX) * 0.5f;
+    const float halfZ = (bounds.maxZ - bounds.minZ) * 0.5f;
+    const float sourceRadius = std::max(halfX, halfZ);
+    if (sourceRadius <= 0.000001f) return;
+
+    const float scale = 5.45f / sourceRadius;
     const auto& vertices = m_mapMesh->vertices();
     const auto& indices = m_mapMesh->indices();
 
-    // Never allow a dense Map 1 mesh to consume the complete shared vertex
-    // buffer. Gameplay overlays (players, training Dummy, hazards) are appended
-    // after the map and must always have room to render on real hardware.
-    static constexpr std::uint32_t GameplayVertexReserve = 512;
-    static constexpr std::uint32_t MapVertexLimit = MaxVertices - GameplayVertexReserve;
-
     for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
-        if (m_vertexCount + 3 > MapVertexLimit) break;
+        if (m_vertexCount + 3 > MaxVertices) break;
+        const WbmVertex* tri[3] = {
+            &vertices[indices[i]], &vertices[indices[i + 1]], &vertices[indices[i + 2]]
+        };
 
-        const WbmVertex& a = vertices[indices[i]];
-        const WbmVertex& b = vertices[indices[i + 1]];
-        const WbmVertex& c = vertices[indices[i + 2]];
-
-        const float ux = b.x - a.x;
-        const float uz = b.z - a.z;
-        const float vx = c.x - a.x;
-        const float vz = c.z - a.z;
-        const float normalY = uz * vx - ux * vz;
-        if (normalY <= 0.0000001f) continue;
-
-        const WbmVertex* tri[3] = {&a, &b, &c};
         for (const WbmVertex* v : tri) {
-            appendVertex(mapToClipX(v->x), mapToClipY(v->z),
-                         v->r / 255.0f, v->g / 255.0f,
-                         v->b / 255.0f, v->a / 255.0f);
+            const float worldX = (v->x - centerX) * scale;
+            const float worldY = (v->y - bounds.maxY) * scale;
+            const float worldZ = (v->z - centerZ) * scale;
+            float x = 0.0f, y = 0.0f, z = 0.5f;
+            projectWorld(worldX, worldY, worldZ, x, y, z);
+            appendVertex3D(x, y, z,
+                           v->r / 255.0f, v->g / 255.0f,
+                           v->b / 255.0f, v->a / 255.0f);
         }
     }
+}
+
+bool DebugRenderer::addPlayerMesh(const PlayerState& player,
+                                  const Vec3& facing,
+                                  float tintR, float tintG, float tintB) {
+    if (!m_dummyMesh || !m_dummyMesh->valid() || player.eliminated) return false;
+
+    const WbmBounds& bounds = m_dummyMesh->bounds();
+    const float height = bounds.maxY - bounds.minY;
+    if (height <= 0.000001f) return false;
+
+    const float centerX = (bounds.minX + bounds.maxX) * 0.5f;
+    const float centerZ = (bounds.minZ + bounds.maxZ) * 0.5f;
+    const float scale = 1.70f / height;
+
+    float fx = facing.x;
+    float fz = facing.z;
+    const float facingLength = std::sqrt(fx * fx + fz * fz);
+    if (facingLength <= 0.0001f) {
+        fx = 1.0f;
+        fz = 0.0f;
+    } else {
+        fx /= facingLength;
+        fz /= facingLength;
+    }
+
+    const float yaw = std::atan2(fx, fz);
+    const float cosYaw = std::cos(yaw);
+    const float sinYaw = std::sin(yaw);
+
+    const auto& vertices = m_dummyMesh->vertices();
+    const auto& indices = m_dummyMesh->indices();
+    const std::uint32_t startVertex = m_vertexCount;
+
+    for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
+        if (m_vertexCount + 3 > MaxVertices) break;
+        const WbmVertex* tri[3] = {
+            &vertices[indices[i]], &vertices[indices[i + 1]], &vertices[indices[i + 2]]
+        };
+
+        for (const WbmVertex* v : tri) {
+            const float localX = (v->x - centerX) * scale;
+            const float localY = (v->y - bounds.minY) * scale;
+            const float localZ = (v->z - centerZ) * scale;
+
+            const float rotatedX = localX * cosYaw + localZ * sinYaw;
+            const float rotatedZ = -localX * sinYaw + localZ * cosYaw;
+            const float worldX = player.position.x + rotatedX;
+            const float worldY = player.position.y + localY;
+            const float worldZ = player.position.z + rotatedZ;
+
+            float x = 0.0f, y = 0.0f, z = 0.5f;
+            projectWorld(worldX, worldY, worldZ, x, y, z);
+            appendVertex3D(x, y, z,
+                           std::clamp((v->r / 255.0f) * tintR, 0.0f, 1.0f),
+                           std::clamp((v->g / 255.0f) * tintG, 0.0f, 1.0f),
+                           std::clamp((v->b / 255.0f) * tintB, 0.0f, 1.0f),
+                           v->a / 255.0f);
+        }
+    }
+
+    return m_vertexCount > startVertex;
 }
 
 bool DebugRenderer::addPropMesh(const WbmMesh* mesh,
@@ -199,25 +274,18 @@ bool DebugRenderer::addPropMesh(const WbmMesh* mesh,
 
     for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
         if (m_vertexCount + 3 > MaxVertices) break;
-
-        const WbmVertex& a = vertices[indices[i]];
-        const WbmVertex& b = vertices[indices[i + 1]];
-        const WbmVertex& c = vertices[indices[i + 2]];
-
-        const float ux = b.x - a.x;
-        const float uz = b.z - a.z;
-        const float vx = c.x - a.x;
-        const float vz = c.z - a.z;
-        const float projectedArea = uz * vx - ux * vz;
-        if (std::fabs(projectedArea) <= 0.0000001f) continue;
-
-        const WbmVertex* tri[3] = {&a, &b, &c};
+        const WbmVertex* tri[3] = {
+            &vertices[indices[i]], &vertices[indices[i + 1]], &vertices[indices[i + 2]]
+        };
         for (const WbmVertex* v : tri) {
             const float worldX = position.x + (v->x - centerX) * scale;
+            const float worldY = position.y + (v->y - bounds.minY) * scale;
             const float worldZ = position.z + (v->z - centerZ) * scale;
-            appendVertex(worldToClipX(worldX), worldToClipY(worldZ),
-                         v->r / 255.0f, v->g / 255.0f,
-                         v->b / 255.0f, v->a / 255.0f);
+            float x = 0.0f, y = 0.0f, z = 0.5f;
+            projectWorld(worldX, worldY, worldZ, x, y, z);
+            appendVertex3D(x, y, z,
+                           v->r / 255.0f, v->g / 255.0f,
+                           v->b / 255.0f, v->a / 255.0f);
         }
     }
 
@@ -226,6 +294,7 @@ bool DebugRenderer::addPropMesh(const WbmMesh* mesh,
 
 void DebugRenderer::addCarHazard(const GameWorld& world) {
     const CarHazardState& car = world.car();
+    if (car.phase == CarHazardPhase::Waiting) return;
 
     if (car.phase == CarHazardPhase::Warning) {
         const float laneY = worldToClipY(car.position.z);
@@ -234,18 +303,10 @@ void DebugRenderer::addCarHazard(const GameWorld& world) {
         return;
     }
 
-    if (car.phase != CarHazardPhase::Driving) return;
-
     const float x = worldToClipX(car.position.x);
     const float y = worldToClipY(car.position.z);
-    const float halfW = 0.12f;
-    const float halfH = 0.065f;
-
-    addQuad(x - halfW, y - halfH, x + halfW, y + halfH,
+    addQuad(x - 0.12f, y - 0.065f, x + 0.12f, y + 0.065f,
             0.12f, 0.12f, 0.15f, 1.0f);
-    addQuad(x - halfW * 0.60f, y - halfH * 0.55f,
-            x + halfW * 0.60f, y + halfH * 0.55f,
-            0.30f, 0.68f, 0.90f, 1.0f);
 }
 
 void DebugRenderer::addSpawnedProps(const GameWorld& world) {
@@ -271,22 +332,7 @@ void DebugRenderer::addSpawnedProps(const GameWorld& world) {
 
         const float x = worldToClipX(prop.position.x);
         const float y = worldToClipY(prop.position.z);
-        switch (prop.type) {
-        case MapPropType::SmallBox:
-            addQuad(x - 0.030f, y - 0.030f, x + 0.030f, y + 0.030f,
-                    0.72f, 0.48f, 0.20f, 1.0f);
-            break;
-        case MapPropType::BigBox:
-            addQuad(x - 0.050f, y - 0.050f, x + 0.050f, y + 0.050f,
-                    0.48f, 0.28f, 0.12f, 1.0f);
-            break;
-        case MapPropType::ExplosiveBarrel:
-            addDiamond(x, y, 0.052f, 0.95f, 0.18f, 0.08f, 1.0f);
-            addDiamond(x, y, 0.026f, 1.0f, 0.72f, 0.10f, 1.0f);
-            break;
-        case MapPropType::None:
-            break;
-        }
+        addDiamond(x, y, 0.04f, 0.80f, 0.46f, 0.12f, 1.0f);
     }
 }
 
@@ -355,6 +401,7 @@ void DebugRenderer::drawCurrentGeometry() {
     GX2SetFetchShader(&m_shader.fetchShader);
     GX2SetVertexShader(m_shader.vertexShader);
     GX2SetPixelShader(m_shader.pixelShader);
+    GX2SetDepthOnlyControl(TRUE, TRUE, GX2_COMPARE_FUNC_LEQUAL);
     GX2RSetAttributeBuffer(&m_positionBuffer, 0, m_positionBuffer.elemSize, 0);
     GX2RSetAttributeBuffer(&m_colourBuffer, 1, m_colourBuffer.elemSize, 0);
     GX2DrawEx(GX2_PRIMITIVE_MODE_TRIANGLES, m_vertexCount, 0, 1);
@@ -391,29 +438,34 @@ void DebugRenderer::draw(const GameWorld& world) {
     addCarHazard(world);
     addSpawnedProps(world);
 
-    // V0.1 hardware markers: blue = player, red = no-AI training Dummy,
-    // yellow = training Dummy currently grabbed. This makes grab state visible
-    // before the animated Dummy renderer is connected.
     for (std::size_t i = 0; i < world.playerCount(); ++i) {
         const PlayerState& player = world.player(i);
-        const float x = worldToClipX(player.position.x);
-        const float y = worldToClipY(player.position.z);
-        const float size = 0.060f + std::clamp(player.position.y, 0.0f, 3.0f) * 0.006f;
+        if (player.eliminated) continue;
 
-        if (player.eliminated) {
+        float tintR = 1.0f;
+        float tintG = 1.0f;
+        float tintB = 1.0f;
+        if (world.isGrabbed(i)) {
+            tintR = 1.0f;
+            tintG = 0.86f;
+            tintB = 0.38f;
+        }
+
+        Vec3 visualFacing{player.velocity.x, 0.0f, player.velocity.z};
+        if (std::fabs(visualFacing.x) + std::fabs(visualFacing.z) < 0.05f) {
+            visualFacing = world.isTrainingDummy(i) ? Vec3{-1.0f, 0.0f, 0.0f}
+                                                    : Vec3{ 1.0f, 0.0f, 0.0f};
+        }
+
+        if (!addPlayerMesh(player, visualFacing, tintR, tintG, tintB)) {
+            const float x = worldToClipX(player.position.x);
+            const float y = worldToClipY(player.position.z);
+            const float size = 0.060f;
             addQuad(x - size, y - size, x + size, y + size,
-                    0.18f, 0.18f, 0.18f, 1.0f);
-        } else if (world.isTrainingDummy(i)) {
-            if (world.isGrabbed(i)) {
-                addQuad(x - size, y - size, x + size, y + size,
-                        1.0f, 0.72f, 0.08f, 1.0f);
-            } else {
-                addQuad(x - size, y - size, x + size, y + size,
-                        1.0f, 0.06f, 0.04f, 1.0f);
-            }
-        } else {
-            addQuad(x - size, y - size, x + size, y + size,
-                    0.02f, 0.55f, 1.0f, 1.0f);
+                    world.isTrainingDummy(i) ? 1.0f : 0.02f,
+                    world.isTrainingDummy(i) ? 0.06f : 0.55f,
+                    world.isTrainingDummy(i) ? 0.04f : 1.0f,
+                    1.0f);
         }
     }
 
