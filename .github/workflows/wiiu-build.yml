@@ -66,7 +66,6 @@ jobs:
           set -euo pipefail
           mkdir -p build-runtime
 
-          # Prefer the real editable Map 2 GLB as soon as it is tracked.
           if [ -f "assets/source/maps/map 2.glb" ]; then
             python3 tools/glb_to_wbm.py "assets/source/maps/map 2.glb" build-runtime/map_02.wbm
           elif [ -f assets/source/maps/map_02.glb ]; then
@@ -74,17 +73,13 @@ jobs:
           elif [ -f assets/runtime/map_02.wbm ]; then
             cp assets/runtime/map_02.wbm build-runtime/map_02.wbm
           else
-            # Hardware-test fallback: create a simple flat Map 2 arena directly
-            # in WBM1 so the RPX never exits at boot just because the source map
-            # has not been committed yet. This is intentionally temporary and
-            # will be replaced automatically by the real GLB above.
+            # Temporary hardware-test arena. The real Map 2 GLB automatically
+            # replaces this as soon as it is tracked in assets/source/maps/.
             python3 - <<'PY'
           import struct
           from pathlib import Path
 
           out = Path('build-runtime/map_02.wbm')
-          # WBM1 header inferred from the project parser: magic, version,
-          # vertex count, index count, followed by 7-float vertices and u32 indices.
           vertices = [
               (-6.0, 0.0, -6.0, 70, 92, 108, 255),
               ( 6.0, 0.0, -6.0, 70, 92, 108, 255),
